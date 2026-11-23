@@ -51,10 +51,16 @@ impl Recognizer {
         // Its memory arena stays on: without it the session holds 65 MB
         // instead of 110-175 MB, but reads take 1.5-2x as long per line. The
         // worker unloads the model when idle instead.
+        // Threads: about one per physical core, at most 8, and no spinning
+        // between steps. Reading 42 lines on 16 cores, 8 threads take as long
+        // as 16 (1.5-1.7 s) for half the CPU time (10 s vs 16-20 s); spinning
+        // added another 50% of CPU time for no speed.
+        let logical = std::thread::available_parallelism().map_or(2, |n| n.get());
         let session = Session::builder(&env)
             .map_err(|e| err(&e))?
-            // 0 = one thread per physical core; measured fastest.
-            .with_intra_threads(0)
+            .with_intra_threads((logical / 2).clamp(1, 8))
+            .map_err(|e| err(&e))?
+            .with_intra_op_spinning(false)
             .map_err(|e| err(&e))?
             .commit_from_file(path)
             .map_err(|e| err(&e))?;

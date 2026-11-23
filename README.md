@@ -2,8 +2,9 @@
 
 Live Text for Windows: rest the cursor on any image on screen and select the
 text inside it like normal text, then copy it with Ctrl+C or the right-click
-menu. Reads English and Vietnamese. Tested in Edge and Firefox, Electron
-apps such as Zalo, Photos, Media Player and VLC.
+menu. Reads English and Vietnamese. Tested in Edge, Brave and Firefox (also
+Facebook's photo viewer), Electron apps such as Zalo, Photos, Media Player
+and VLC.
 
 **Videos**: a paused video's frame is read like an image; a playing one is
 left alone. In web pages (Edge, Firefox) and desktop players (Media Player,
@@ -59,7 +60,13 @@ Translate web client (not an official API; it may change). Set
      its own), top-level windows (games) and web page content are left
      alone;
    - in apps that expose no accessibility tree (Electron apps like Zalo),
-     the image rectangle found from pixels (`src/rectfind.rs`).
+     the image rectangle found from pixels (`src/rectfind.rs`);
+   - on a web page where nothing exposed is under the cursor, a picture the
+     page leaves out of the tree (an `<img alt="">`, as in Facebook's photo
+     viewer, or a CSS background), also found from pixels. It is read only
+     if UI Automation, asked at 16 points across it, finds nothing of the
+     page's own there (text, links, images, controls), so a box of real
+     text is left alone.
 2. The image is captured with GDI, upscaled 2x and run through Windows OCR,
    which finds the lines and words. The overlay appears right away, so text
    can be selected while step 3 runs.

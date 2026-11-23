@@ -1,9 +1,11 @@
 //! Finds the bounds of an image from pixels alone, for apps that expose no
-//! accessibility tree (Electron apps such as Zalo).
+//! accessibility tree (Electron apps such as Zalo) and pictures a web page
+//! leaves out of its tree.
 //!
-//! Chat apps draw images as rectangles on a flat background. Starting at the
-//! cursor we look left and right for a long vertical edge whose outer side is
-//! flat, take the image height from those edges, refine top and bottom with
+//! Chat apps draw images as rectangles on a flat background; photo viewers
+//! on a blurred copy of the photo. Starting at the cursor we look left and
+//! right for a long vertical edge whose outer side is flat or changes only
+//! gradually, take the image height from those edges, refine top and bottom with
 //! horizontal edges, and accept the result only if the background left and
 //! right of it is the same color. That last check rejects list-row
 //! highlights and panels, whose two sides sit on different backgrounds.
@@ -12,6 +14,8 @@
 const EDGE: i32 = 24;
 /// Max deviation from the mean for a pixel to count as flat background.
 const FLAT: i32 = 18;
+/// Max color difference between neighbouring pixels of a blurred background.
+const SMOOTH: i32 = 6;
 /// Consecutive non-edge pixels tolerated along a boundary.
 const GAP: usize = 6;
 /// Shortest image side we accept, in physical pixels.
@@ -112,12 +116,19 @@ impl Img<'_> {
         if y1 - y0 + 1 < MIN_SIDE {
             return None;
         }
-        let (bg, flat) = Self::flat(self.col(outside, y0, y1));
-        if !flat {
+        let outer: Vec<Rgb> = self.col(outside, y0, y1).collect();
+        if !Self::flat(outer.iter().copied()).1 && !Self::smooth(&outer) {
             return None;
         }
-        let differs = (y0..=y1).filter(|&y| diff(self.at(inside, y), bg) >= EDGE).count();
+        let differs = (y0..=y1).filter(|&y| diff(self.at(inside, y), outer[y - y0]) >= EDGE).count();
         (differs * 10 >= (y1 - y0 + 1) * 6).then_some((y0, y1))
+    }
+
+    /// Whether colors along a line change only gradually, as on a blurred
+    /// backdrop (a photo viewer's blurred copy of the photo).
+    fn smooth(px: &[Rgb]) -> bool {
+        let steps = px.windows(2).filter(|p| diff(p[0], p[1]) <= SMOOTH).count();
+        steps * 10 >= px.len().saturating_sub(1) * 9
     }
 
     /// Most common color of the whole buffer (sampled, quantized to 4 bits per channel).
@@ -248,8 +259,8 @@ fn evaluate(img: &Img, cx: usize, cy: usize, (left, ly): Side, (right, ry): Side
     }
 
     // Same background on both sides, or this is a panel / highlighted row.
-    let (bg_l, _) = Img::mean(img.col(left - 1, top, bottom - 1));
-    let (bg_r, _) = Img::mean(img.col(right.min(w - 1), top, bottom - 1));
+    let (bg_l, _) = Img::mean(img.col(left.saturating_sub(4), top, bottom - 1));
+    let (bg_r, _) = Img::mean(img.col((right + 3).min(w - 1), top, bottom - 1));
     if diff(bg_l, bg_r) > SAME_BG {
         debug(&format!("rejected: backgrounds differ {bg_l:?} vs {bg_r:?}"));
         return None;
@@ -363,6 +374,27 @@ mod tests {
         }
         let r = c.find(600, 500).expect("viewer image not found");
         assert!(near(r, (250, 180, 1350, 900)), "{r:?}");
+    }
+
+    #[test]
+    fn finds_viewer_image_on_blurred_backdrop() {
+        // Facebook's viewer: a dark backdrop that is a blurred copy of the
+        // photo, so it changes color slowly down the sides; a white card
+        // inside the photo comes first.
+        let mut c = Canvas::new(1600, 1000, [74, 74, 74]);
+        c.rect(0, 0, 1600, 1000, |_, y| {
+            let t = (y as i32 - 300).unsigned_abs() as usize;
+            let v = if t < 150 { 150 - t } else { 0 };
+            [(74 + v / 2) as u8, (74 + v / 3) as u8, (74 - v / 3) as u8]
+        });
+        c.rect(600, 40, 1000, 960, |_, y| if y < 200 { [200, 120, 40] } else { [240, 230, 220] });
+        c.rect(630, 400, 970, 600, |_, _| [255, 255, 255]);
+        for line in 0..4 {
+            let y = 430 + line * 40;
+            c.rect(650, y, 940, y + 12, |x, _| if (x / 6) % 3 == 0 { [255, 255, 255] } else { [30, 30, 30] });
+        }
+        let r = c.find(800, 500).expect("viewer image not found");
+        assert!(near(r, (600, 40, 1000, 960)), "{r:?}");
     }
 
     #[test]

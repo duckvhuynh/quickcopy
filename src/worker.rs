@@ -142,6 +142,8 @@ pub struct Detector {
     /// --probe tests a point that is not where the real cursor is.
     ignore_cursor: bool,
     viet: Option<viet::Recognizer>,
+    /// When the Vietnamese model last read something.
+    viet_used: Instant,
     viet_failed: bool,
     /// Chromium top-level windows already given time to build a tree (see detect).
     waited: std::collections::HashSet<isize>,
@@ -165,6 +167,7 @@ impl Detector {
             own_pid: std::process::id() as i32,
             ignore_cursor: false,
             viet: None,
+            viet_used: Instant::now(),
             viet_failed: false,
             waited: Default::default(),
             sessions: Default::default(),
@@ -239,6 +242,22 @@ impl Detector {
             let Some(clip) = image_from_pixels(pt)? else {
                 return Ok(Found::Nothing);
             };
+            (clip, None)
+        } else if (control_type == UIA_GroupControlTypeId || control_type == UIA_DocumentControlTypeId) && is_web(&element) {
+            // Nothing the page exposes is under the point, but a picture may
+            // be: browsers leave an <img alt=""> out of the tree (Facebook's
+            // photo viewer), and a CSS background is never in it. Found from
+            // pixels, unless the page shows its own content there (a box of
+            // text and images, whose text can be selected as it is).
+            if from_cursor && !self.ignore_cursor && cursor_is_ibeam() {
+                return Ok(Found::Nothing);
+            }
+            let Some(clip) = image_from_pixels(pt)? else {
+                return Ok(Found::Nothing);
+            };
+            if self.page_content_in(clip)? {
+                return Ok(Found::Nothing);
+            }
             (clip, None)
         } else if let Some(surface) = self.surface(&element, control_type)? {
             // A picture the app draws itself (an image viewer's canvas, a
@@ -440,6 +459,31 @@ impl Detector {
         self.cache.insert(key, words);
     }
 
+    /// True if a web page shows something of its own inside `area` (text, a
+    /// link, an image, a control): UI Automation is asked at a grid of points
+    /// in it, and a picture the page does not expose answers with plain
+    /// unnamed boxes everywhere.
+    fn page_content_in(&self, area: RECT) -> Result<bool> {
+        const N: i32 = 4;
+        let (w, h) = (area.right - area.left, area.bottom - area.top);
+        for i in 0..N {
+            for j in 0..N {
+                let pt = POINT { x: area.left + w * (2 * i + 1) / (2 * N), y: area.top + h * (2 * j + 1) / (2 * N) };
+                let element = unsafe { self.uia.ElementFromPoint(pt)? };
+                let control_type = unsafe { element.CurrentControlType()? };
+                // The page itself is named after its title; boxes inside it
+                // that are named are labelled regions or figures.
+                let page = control_type == UIA_DocumentControlTypeId;
+                let unnamed_box = [UIA_GroupControlTypeId, UIA_PaneControlTypeId].contains(&control_type) && unsafe { element.CurrentName()? }.is_empty();
+                if !page && !unnamed_box {
+                    log(format!("web page: its own content at {},{} (control type {})", pt.x, pt.y, control_type.0));
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
     /// A Chromium/Electron content window whose accessibility tree is empty.
     fn is_chromium_without_tree(&self, pt: POINT, element: &IUIAutomationElement) -> bool {
         let mut class = [0u16; 64];
@@ -471,7 +515,10 @@ impl Detector {
 
     fn finish_loading(&mut self, loading: Option<Loading>) {
         match loading.map(|l| l.join()) {
-            Some(Ok(Ok(model))) => self.viet = Some(model),
+            Some(Ok(Ok(model))) => {
+                self.viet = Some(model);
+                self.viet_used = Instant::now();
+            }
             Some(Ok(Err(e))) => {
                 log(format!("Vietnamese OCR unavailable: {e}"));
                 self.viet_failed = true;
@@ -541,6 +588,7 @@ impl Detector {
     /// OCR lacks. Lines it cannot read keep Windows OCR's words.
     fn read_vietnamese(&mut self, pixels: &[u8], sw: i32, sh: i32, mut lines: Vec<Vec<(Box4, String)>>) -> Vec<Vec<(Box4, String)>> {
         let t0 = Instant::now();
+        self.viet_used = t0;
         let crops: Vec<Option<Crop>> = lines.iter().map(|b| crop_line(pixels, sw as usize, sh as usize, b)).collect();
         let present: Vec<(usize, &Crop)> = crops.iter().enumerate().filter_map(|(i, c)| Some((i, c.as_ref()?))).collect();
         let inputs: Vec<viet::Line> = present.iter().map(|(_, c)| viet::Line { px: &c.px, w: c.w, h: c.h }).collect();
@@ -636,19 +684,20 @@ pub fn run(rx: Receiver<Request>, hwnd: isize) {
     let mut backlog: Option<Request> = None;
 
     loop {
+        // Unused for a while: give back what the Vietnamese model holds. An
+        // overlay that stays up keeps requests coming (revalidation), so this
+        // counts from the model's last read, not the last request.
+        if detector.viet.is_some() && detector.viet_used.elapsed() >= UNLOAD_AFTER {
+            detector.viet = None;
+            log("Vietnamese model unloaded (idle)".into());
+        }
         let next = match backlog.take() {
             Some(r) => Ok(r),
             None => rx.recv_timeout(UNLOAD_AFTER),
         };
         let first = match next {
             Ok(r) => r,
-            Err(RecvTimeoutError::Timeout) => {
-                // Idle: give back what the Vietnamese model holds.
-                if detector.viet.take().is_some() {
-                    log("Vietnamese model unloaded (idle)".into());
-                }
-                continue;
-            }
+            Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => break,
         };
         // Coalesce queued requests: the newest Detect wins, then prefetches;
@@ -867,6 +916,11 @@ fn visible_rect(pt: POINT, r: RECT) -> Option<RECT> {
         return None;
     }
     Some(clip)
+}
+
+/// True if `element` is part of a web page (Chromium or Firefox).
+fn is_web(element: &IUIAutomationElement) -> bool {
+    unsafe { element.CurrentFrameworkId() }.is_ok_and(|f| f == "Chrome" || f == "Gecko")
 }
 
 /// The top-level window under `pt` if it is a Chromium/Electron window.
