@@ -2,7 +2,17 @@
 name = "quickcopy"
 version = "0.1.0"
 edition = "2024"
+# ort 2.0.0-rc.15 is the dependency that needs the newest Rust.
+rust-version = "1.92"
 description = "Select and copy text inside any on-screen image (Live Text style) on Windows"
+authors = ["duckvhuynh"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/duckvhuynh/quickcopy"
+readme = "README.md"
+keywords = ["ocr", "clipboard", "windows", "vietnamese", "live-text"]
+categories = ["accessibility", "gui", "text-processing", "os::windows-apis"]
+# Corpus tooling and downloaded model weights stay out of a published crate.
+exclude = ["/tools", "/models/**/*.onnx"]
 
 [dependencies]
 # Loaded at runtime only for Vietnamese OCR: onnxruntime.dll next to the exe,
