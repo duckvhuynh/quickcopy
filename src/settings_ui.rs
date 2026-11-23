@@ -22,6 +22,7 @@ use windows_numerics::Vector2;
 
 use crate::i18n::{self, UiLang};
 use crate::settings::{self, Shortcut};
+use crate::update::{self, Status};
 use crate::{paint, theme};
 
 /// Posted to the main window after a setting changed, so it can apply it.
@@ -34,8 +35,9 @@ const PAD: f32 = 16.0;
 const TOP: f32 = 4.0;
 const ROW_H: f32 = 44.0;
 const FOOTER_H: f32 = 34.0;
-const ROWS: usize = 5;
+const ROWS: usize = 7;
 const CONTROL_W: f32 = 200.0;
+const BUTTON_W: f32 = 150.0;
 const CONTROL_H: f32 = 28.0;
 const TEXT_PX: f32 = 13.0;
 const SMALL_PX: f32 = 12.0;
@@ -49,6 +51,9 @@ enum Hit {
     Shortcut,
     UiLang(UiLang),
     OcrToggle,
+    UpdateToggle,
+    CheckNow,
+    Install,
     Search,
     Pick(usize),
 }
@@ -83,6 +88,11 @@ fn scale(hwnd: HWND) -> f32 {
 
 fn client_h() -> f32 {
     TOP + ROWS as f32 * ROW_H + FOOTER_H
+}
+
+/// Redraws the window if it is open (the update status changed).
+pub fn refresh() {
+    with_ui(|ui| invalidate(ui));
 }
 
 /// Opens the settings window, or brings it to the front.
@@ -194,6 +204,8 @@ struct Layout {
     ui_en: D2D_RECT_F,
     ui_vi: D2D_RECT_F,
     ocr_toggle: D2D_RECT_F,
+    update_toggle: D2D_RECT_F,
+    update_button: D2D_RECT_F,
     search: D2D_RECT_F,
     list: D2D_RECT_F,
 }
@@ -230,6 +242,8 @@ fn layout(hwnd: HWND) -> Layout {
         ui_en: D2D_RECT_F { right: mid, ..ui },
         ui_vi: D2D_RECT_F { left: mid, ..ui },
         ocr_toggle: toggle(&rows[4]),
+        update_toggle: toggle(&rows[5]),
+        update_button: control(&rows[6], BUTTON_W),
         search,
         list: D2D_RECT_F { left: (PAD - 6.0) * s, top: search.bottom + 6.0 * s, right: body.right - (PAD - 6.0) * s, bottom: body.bottom },
         rows,
@@ -273,6 +287,8 @@ fn hit_test(ui: &Ui, x: f32, y: f32) -> Hit {
                 (l.ui_en, Hit::UiLang(UiLang::En)),
                 (l.ui_vi, Hit::UiLang(UiLang::Vi)),
                 (l.ocr_toggle, if model { Hit::OcrToggle } else { Hit::None }),
+                (l.update_toggle, Hit::UpdateToggle),
+                (l.update_button, update_button(&update::status()).0),
             ]
             .into_iter()
             .find(|(r, _)| inside(r, x, y))
@@ -288,6 +304,32 @@ fn hit_test(ui: &Ui, x: f32, y: f32) -> Hit {
             let i = ((y - l.list.top + scroll) / (LIST_ROW_H * l.s)) as usize;
             if i < matches(query).len() { Hit::Pick(i) } else { Hit::None }
         }
+    }
+}
+
+/// What the update button does in `status`, and its label. It does nothing
+/// while a check or an install runs.
+fn update_button(status: &Status) -> (Hit, String) {
+    let t = i18n::t();
+    match status.offer() {
+        Some(r) => (Hit::Install, t.update_to.replace("{}", &r.version.to_string())),
+        None if status.busy() => (Hit::None, t.check_now.into()),
+        None => (Hit::CheckNow, t.check_now.into()),
+    }
+}
+
+/// The line under "Updates".
+fn update_line(status: &Status) -> String {
+    let t = i18n::t();
+    match status {
+        Status::NotChecked => t.update_not_checked.into(),
+        Status::Checking => t.update_checking.into(),
+        Status::UpToDate => t.up_to_date.into(),
+        Status::Available(r) => t.update_available.replace("{}", &r.version.to_string()),
+        Status::Installing(r) => t.update_installing.replace("{}", &r.version.to_string()),
+        Status::Restarting => t.update_restarting.into(),
+        Status::CheckFailed(f) => t.check_failed.replace("{}", f.text()),
+        Status::InstallFailed(_, f) => t.update_failed.replace("{}", f.text()),
     }
 }
 
@@ -341,6 +383,12 @@ fn click(ui: &mut Ui, hit: Hit) {
             settings::update(|s| s.vietnamese_ocr = !s.vietnamese_ocr);
             changed(ui);
         }
+        Hit::UpdateToggle => {
+            settings::update(|s| s.check_updates = !s.check_updates);
+            changed(ui);
+        }
+        Hit::CheckNow => update::check_now(),
+        Hit::Install => update::install(),
         Hit::Pick(i) => {
             if let Mode::Picker { query, .. } = &ui.mode {
                 if let Some((code, _)) = matches(query).get(i) {
@@ -580,6 +628,31 @@ fn paint(ui: &mut Ui) -> Result<()> {
                 }
                 pen.text(t.vietnamese_ocr, label_row, TEXT_PX, 400, if model { p.text } else { p.subtle }, false)?;
                 pen.toggle(l.ocr_toggle, model && prefs.vietnamese_ocr, model)?;
+
+                // Check for updates automatically
+                pen.text(t.check_updates, row_text(5), TEXT_PX, 400, p.text, false)?;
+                pen.toggle(l.update_toggle, prefs.check_updates, true)?;
+
+                // Updates: status line, and Check now / Update to X.Y.Z
+                let status = update::status();
+                let mut label_row = row_text(6);
+                label_row.bottom = (label_row.top + label_row.bottom) / 2.0 + 2.0 * l.s;
+                let below = D2D_RECT_F { top: label_row.bottom - 2.0 * l.s, bottom: l.rows[6].bottom - 4.0 * l.s, right: l.update_button.left - 8.0 * l.s, ..row_text(6) };
+                let failed = matches!(status, Status::CheckFailed(_) | Status::InstallFailed(..));
+                unsafe { target.PushAxisAlignedClip(&below, D2D1_ANTIALIAS_MODE_ALIASED) };
+                pen.text(&update_line(&status), below, SMALL_PX - 1.0, 400, if failed { p.error } else { p.subtle }, false)?;
+                unsafe { target.PopAxisAlignedClip() };
+                pen.text(t.updates, label_row, TEXT_PX, 400, p.text, false)?;
+                let (action, label) = update_button(&status);
+                let (fill, color) = match action {
+                    Hit::Install => (Some((p.accent, 1.0)), p.on_accent),
+                    Hit::None => (None, p.subtle),
+                    _ => (hover(action).then_some((p.hover.0, p.hover.1)), p.text),
+                };
+                pen.rounded(l.update_button, theme::CONTROL_RADIUS, fill, Some((p.control_border.0, p.control_border.1)))?;
+                let lw = paint::measure(&label, TEXT_PX * l.s, 400);
+                let centered = D2D_RECT_F { left: (l.update_button.left + l.update_button.right - lw) / 2.0, ..l.update_button };
+                pen.text(&label, centered, TEXT_PX, 400, color, false)?;
             }
             Mode::Picker { query, scroll, highlight } => {
                 // Search box

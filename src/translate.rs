@@ -21,6 +21,8 @@ use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use windows::core::*;
 
 use crate::common::{RECT, log};
+#[cfg(windows)]
+use crate::http::{self, Handle, check};
 
 #[cfg(windows)]
 pub const WM_APP_TRANSLATED: u32 = WM_APP + 4; // lparam = Box<Translated>
@@ -260,29 +262,6 @@ fn encode(s: &str) -> String {
     out
 }
 
-#[cfg(windows)]
-struct Handle(*mut c_void);
-
-#[cfg(windows)]
-impl Drop for Handle {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe {
-                let _ = WinHttpCloseHandle(self.0);
-            }
-        }
-    }
-}
-
-// WinHTTP handles may be used from any thread.
-#[cfg(windows)]
-unsafe impl Send for Handle {}
-
-#[cfg(windows)]
-fn check(h: *mut c_void) -> Result<Handle> {
-    if h.is_null() { Err(Error::from_thread()) } else { Ok(Handle(h)) }
-}
-
 /// The connection to `HOST` that every request shares, opened on first use
 /// and kept for the life of the process. A session per request repeated
 /// proxy detection, DNS and the TLS handshake each time (measured: three
@@ -294,7 +273,7 @@ fn connection() -> Result<*mut c_void> {
     let mut shared = SHARED.lock().unwrap();
     if shared.is_none() {
         unsafe {
-            let session = check(WinHttpOpen(w!("QuickCopy/0.1"), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, PCWSTR::null(), PCWSTR::null(), 0))?;
+            let session = http::open_session()?;
             WinHttpSetTimeouts(session.0, 5000, 5000, 8000, 8000)?;
             // HTTP/2, so requests sent together share the connection.
             let _ = WinHttpSetOption(Some(session.0), WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, Some(&WINHTTP_PROTOCOL_FLAG_HTTP2.to_ne_bytes()));
@@ -320,20 +299,7 @@ fn https_get(path: &str) -> Result<Vec<u8>> {
         ))?;
         WinHttpSendRequest(request.0, None, None, 0, 0, 0)?;
         WinHttpReceiveResponse(request.0, std::ptr::null_mut())?;
-        let mut body = Vec::new();
-        loop {
-            let mut available = 0u32;
-            WinHttpQueryDataAvailable(request.0, &mut available)?;
-            if available == 0 {
-                break;
-            }
-            let start = body.len();
-            body.resize(start + available as usize, 0);
-            let mut read = 0u32;
-            WinHttpReadData(request.0, body[start..].as_mut_ptr() as *mut c_void, available, &mut read)?;
-            body.truncate(start + read as usize);
-        }
-        Ok(body)
+        http::read_body(&request)
     }
 }
 
