@@ -25,6 +25,16 @@ use crate::viet;
 
 pub const WM_APP_SHOW: u32 = WM_APP + 1; // lparam = Box<OcrData>
 pub const WM_APP_HIDE: u32 = WM_APP + 2;
+pub const WM_APP_UPDATE: u32 = WM_APP + 3; // lparam = Box<OcrData>
+/// How long an image may keep changing (opening animation) before we give up.
+const SETTLE_TIMEOUT: Duration = Duration::from_millis(1200);
+const SETTLE_STEP: Duration = Duration::from_millis(40);
+/// Time a Chromium window gets to build its accessibility tree on first contact.
+/// Edge needed ~380 ms; Electron apps with accessibility off never get one.
+const TREE_WAIT: Duration = Duration::from_millis(1000);
+/// Prefetch retries while a newly opened window loads its image.
+const PREFETCH_TRIES: usize = 6;
+const PREFETCH_RETRY: Duration = Duration::from_millis(250);
 
 /// Smallest image (in physical pixels) worth OCR-ing.
 const MIN_W: i32 = 24;
@@ -47,10 +57,30 @@ pub struct OcrData {
     pub words: Vec<Word>,
     /// Union of word rects per line, relative to `rect`.
     pub lines: Vec<RECT>,
+    /// Identifies the image, so a later `WM_APP_UPDATE` can find its overlay.
+    pub id: u64,
+    /// Words are Windows OCR's; the Vietnamese reading is still coming.
+    pub pending: bool,
+}
+
+impl OcrData {
+    fn new(rect: RECT, words: Vec<Word>, id: u64, pending: bool) -> Self {
+        Self { rect, lines: line_rects(&words), words, id, pending }
+    }
+}
+
+/// Which result `detect` is reporting.
+pub enum Stage {
+    /// First words for an image (posted as `WM_APP_SHOW`).
+    Show,
+    /// Final words for an image already shown (posted as `WM_APP_UPDATE`).
+    Update,
 }
 
 pub enum Request {
     Detect(POINT),
+    /// OCR the image at this point ahead of time (a window just opened).
+    Prefetch(POINT),
     Revalidate,
     Forget,
 }
@@ -72,6 +102,8 @@ pub struct Detector {
     ignore_cursor: bool,
     viet: Option<viet::Recognizer>,
     viet_failed: bool,
+    /// Chromium content windows already given time to build a tree (see detect).
+    no_tree: std::collections::HashSet<isize>,
 }
 
 /// Read text with the Vietnamese model (set from the tray menu).
@@ -92,6 +124,7 @@ impl Detector {
             ignore_cursor: false,
             viet: None,
             viet_failed: false,
+            no_tree: Default::default(),
         })
     }
 
@@ -103,14 +136,36 @@ impl Detector {
             .unwrap_or_default()
     }
 
-    /// Returns the OCR result for the image under `pt`, if there is one with text.
-    fn detect(&mut self, pt: POINT) -> Result<Option<(OcrData, Current)>> {
+    /// Finds the image under `pt` and OCRs it. `report` gets the result as
+    /// soon as Windows OCR has the words (`Stage::Show`, marked pending when
+    /// Vietnamese is still being read), then the final words (`Stage::Update`).
+    /// `from_cursor` is false for prefetching, where the cursor is elsewhere.
+    fn detect(&mut self, pt: POINT, from_cursor: bool, report: &mut dyn FnMut(Stage, OcrData)) -> Result<Option<Current>> {
         let t0 = Instant::now();
-        let element = unsafe { self.uia.ElementFromPoint(pt)? };
+        let mut element = unsafe { self.uia.ElementFromPoint(pt)? };
         if unsafe { element.CurrentProcessId()? } == self.own_pid {
             return Ok(None);
         }
-        let control_type = unsafe { element.CurrentControlType()? };
+        let mut control_type = unsafe { element.CurrentControlType()? };
+        // Chrome/Edge build their accessibility tree only after the first
+        // query, so a fresh window looks empty like Zalo. Ask once more after
+        // a moment; windows still empty then are remembered as pixel-only.
+        if control_type == UIA_PaneControlTypeId && self.is_chromium_without_tree(pt, &element) {
+            let window = unsafe { WindowFromPoint(pt) }.0 as isize;
+            if self.no_tree.insert(window) {
+                let start = Instant::now();
+                while start.elapsed() < TREE_WAIT {
+                    std::thread::sleep(Duration::from_millis(100));
+                    element = unsafe { self.uia.ElementFromPoint(pt)? };
+                    control_type = unsafe { element.CurrentControlType()? };
+                    if control_type != UIA_PaneControlTypeId || !self.is_chromium_without_tree(pt, &element) {
+                        log(format!("accessibility tree appeared after {:?}", start.elapsed()));
+                        self.no_tree.remove(&window);
+                        break;
+                    }
+                }
+            }
+        }
         let (clip, tracked) = if control_type == UIA_ImageControlTypeId {
             let element_rect = unsafe { element.CurrentBoundingRectangle()? };
             let Some(clip) = visible_rect(pt, element_rect) else {
@@ -119,7 +174,7 @@ impl Detector {
             (clip, Some((element, element_rect)))
         } else if control_type == UIA_PaneControlTypeId && self.is_chromium_without_tree(pt, &element) {
             // Electron app with accessibility turned off (e.g. Zalo): find the image from pixels.
-            if !self.ignore_cursor && cursor_is_ibeam() {
+            if from_cursor && !self.ignore_cursor && cursor_is_ibeam() {
                 log("pixel mode: cursor is over real text".into());
                 return Ok(None);
             }
@@ -134,38 +189,61 @@ impl Detector {
             }
             return Ok(None);
         };
-        let w = clip.right - clip.left;
-        let h = clip.bottom - clip.top;
 
-        let pixels = capture(clip, w, h)?;
-        let hash = hash_pixels(&pixels, w, h);
+        let (w, h) = (clip.right - clip.left, clip.bottom - clip.top);
         // The same pixels read differently in Vietnamese mode.
-        let key = hash ^ if VIETNAMESE.load(Ordering::Relaxed) { 0x9E37_79B9_7F4A_7C15 } else { 0 };
+        let mode = if VIETNAMESE.load(Ordering::Relaxed) { 0x9E37_79B9_7F4A_7C15 } else { 0 };
+        let mut hash = hash_pixels(&capture(clip, w, h)?, w, h);
+        if !self.cache.contains_key(&(hash ^ mode)) {
+            // Not seen before. An image still animating in (viewer zoom, fade)
+            // would be read half-drawn, so wait until two captures agree.
+            // Cache hits skip this: they matched an image that had settled.
+            let Some(settled) = stable_hash(clip, hash)? else {
+                log("image never settled".into());
+                return Ok(None);
+            };
+            hash = settled;
+        }
+        let key = hash ^ mode;
+        let current = Current { element: tracked, clip, hash };
 
-        let words = match self.cache.get(&key) {
-            Some(words) => {
-                log(format!("cache hit {w}x{h} in {:?}", t0.elapsed()));
-                words.clone()
+        if let Some(words) = self.cache.get(&key) {
+            log(format!("cache hit {w}x{h} in {:?}", t0.elapsed()));
+            if !words.is_empty() {
+                report(Stage::Show, OcrData::new(clip, words.clone(), key, false));
             }
-            None => {
-                let words = self.ocr(clip)?;
-                log(format!("ocr {w}x{h}: {} words in {:?}", words.len(), t0.elapsed()));
-                if self.cache.len() >= CACHE_LIMIT {
-                    self.cache.clear();
-                }
-                self.cache.insert(key, words.clone());
-                words
-            }
-        };
-        if words.is_empty() {
+            return Ok(Some(current));
+        }
+
+        let (pixels, sw, sh, scale) = self.capture_scaled(clip)?;
+        let lines = self.windows_lines(&pixels, sw, sh)?;
+        let vietnamese = VIETNAMESE.load(Ordering::Relaxed) && self.recognizer().is_some();
+        let first = to_words(&lines, scale);
+        log(format!("windows ocr {w}x{h}: {} words in {:?}", first.len(), t0.elapsed()));
+        if first.is_empty() {
+            self.remember(key, Vec::new());
             return Ok(None);
         }
-        let data = OcrData {
-            rect: clip,
-            lines: line_rects(&words),
-            words,
+        report(Stage::Show, OcrData::new(clip, first.clone(), key, vietnamese));
+
+        let words = if vietnamese {
+            let lines = self.read_vietnamese(&pixels, sw, sh, lines);
+            let words = to_words(&lines, scale);
+            log(format!("vietnamese ready in {:?}", t0.elapsed()));
+            report(Stage::Update, OcrData::new(clip, words.clone(), key, false));
+            words
+        } else {
+            first
         };
-        Ok(Some((data, Current { element: tracked, clip, hash })))
+        self.remember(key, words);
+        Ok(Some(current))
+    }
+
+    fn remember(&mut self, key: u64, words: Vec<Word>) {
+        if self.cache.len() >= CACHE_LIMIT {
+            self.cache.clear();
+        }
+        self.cache.insert(key, words);
     }
 
     /// A Chromium/Electron content window whose accessibility tree is empty.
@@ -199,8 +277,8 @@ impl Detector {
         self.viet.as_mut()
     }
 
-    /// Captures `clip` (upscaled for small text) and OCRs it.
-    fn ocr(&mut self, clip: RECT) -> Result<Vec<Word>> {
+    /// Captures `clip` upscaled for OCR. Returns pixels, size and the scale.
+    fn capture_scaled(&self, clip: RECT) -> Result<(Vec<u8>, i32, i32, f32)> {
         let w = clip.right - clip.left;
         let h = clip.bottom - clip.top;
         let longest = w.max(h) as f32;
@@ -209,57 +287,62 @@ impl Detector {
         scale = scale.min(self.max_dim as f32 / longest);
         let sw = ((w as f32 * scale).round() as i32).max(1);
         let sh = ((h as f32 * scale).round() as i32).max(1);
-
-        let pixels = capture(clip, sw, sh)?;
-        self.ocr_pixels(&pixels, sw, sh, scale)
+        Ok((capture(clip, sw, sh)?, sw, sh, scale))
     }
 
-    /// OCRs a BGRA buffer that is `scale` times the size of the image it shows;
-    /// word rects come back in the unscaled image's coordinates.
+    /// OCRs a BGRA buffer that is `scale` times the size of the image it shows,
+    /// all stages at once; word rects are in the unscaled image's coordinates.
     fn ocr_pixels(&mut self, pixels: &[u8], sw: i32, sh: i32, scale: f32) -> Result<Vec<Word>> {
+        let mut lines = self.windows_lines(pixels, sw, sh)?;
+        if VIETNAMESE.load(Ordering::Relaxed) && self.recognizer().is_some() {
+            lines = self.read_vietnamese(pixels, sw, sh, lines);
+        }
+        Ok(to_words(&lines, scale))
+    }
+
+    /// Windows OCR: per line, its words' boxes (capture pixels) and text.
+    fn windows_lines(&self, pixels: &[u8], sw: i32, sh: i32) -> Result<Vec<Vec<(Box4, String)>>> {
         let writer = DataWriter::new()?;
         writer.WriteBytes(pixels)?;
         let buffer = writer.DetachBuffer()?;
         let bitmap = SoftwareBitmap::CreateCopyFromBuffer(&buffer, BitmapPixelFormat::Bgra8, sw, sh)?;
         let result = self.engine.RecognizeAsync(&bitmap)?.join()?;
-
-        // Windows OCR finds the lines and word boxes. In Vietnamese mode each
-        // line is then re-read by VieSVTR, which knows the tone marks.
-        let vietnamese = VIETNAMESE.load(Ordering::Relaxed) && self.recognizer().is_some();
-        let t_read = Instant::now();
-        let to_screen = |b: Box4| RECT {
-            left: (b.0 / scale).floor() as i32,
-            top: (b.1 / scale).floor() as i32,
-            right: (b.2 / scale).ceil() as i32,
-            bottom: (b.3 / scale).ceil() as i32,
-        };
-        let mut words = Vec::new();
         let lines = result.Lines()?;
+        let mut out = Vec::new();
         for li in 0..lines.Size()? {
             let line_words = lines.GetAt(li)?.Words()?;
-            let mut boxes: Vec<(Box4, String)> = Vec::new();
+            let mut boxes = Vec::new();
             for wi in 0..line_words.Size()? {
                 let word = line_words.GetAt(wi)?;
                 let r = word.BoundingRect()?;
                 boxes.push(((r.X, r.Y, r.X + r.Width, r.Y + r.Height), word.Text()?.to_string()));
             }
-            if vietnamese {
-                if let Some(recognizer) = self.viet.as_mut() {
-                    match read_line(recognizer, pixels, sw as usize, sh as usize, &boxes) {
-                        Ok(read) if !read.is_empty() => boxes = read,
-                        Ok(_) => {}
-                        Err(e) => log(format!("Vietnamese line {li} failed: {e}")),
+            out.push(boxes);
+        }
+        Ok(out)
+    }
+
+    /// Re-reads every line with VieSVTR, which knows the tone marks Windows
+    /// OCR lacks. Lines it cannot read keep Windows OCR's words.
+    fn read_vietnamese(&mut self, pixels: &[u8], sw: i32, sh: i32, mut lines: Vec<Vec<(Box4, String)>>) -> Vec<Vec<(Box4, String)>> {
+        let t0 = Instant::now();
+        let crops: Vec<Option<Crop>> = lines.iter().map(|b| crop_line(pixels, sw as usize, sh as usize, b)).collect();
+        let present: Vec<(usize, &Crop)> = crops.iter().enumerate().filter_map(|(i, c)| Some((i, c.as_ref()?))).collect();
+        let inputs: Vec<viet::Line> = present.iter().map(|(_, c)| viet::Line { px: &c.px, w: c.w, h: c.h }).collect();
+        match self.viet.as_mut().map(|r| r.recognize_batch(&inputs)) {
+            Some(Ok(read)) => {
+                for ((li, crop), chars) in present.iter().zip(read) {
+                    let vi = words_from_chars(crop, &chars, &lines[*li]);
+                    if !vi.is_empty() {
+                        lines[*li] = vi;
                     }
                 }
             }
-            for (b, text) in boxes {
-                words.push(Word { rect: to_screen(b), text, line: li as usize });
-            }
+            Some(Err(e)) => log(format!("Vietnamese read failed: {e}")),
+            None => {}
         }
-        if vietnamese {
-            log(format!("Vietnamese read {} lines in {:?}", lines.Size()?, t_read.elapsed()));
-        }
-        Ok(words)
+        log(format!("Vietnamese read {} lines in {:?}", present.len(), t0.elapsed()));
+        lines
     }
 
     /// True if the image the overlay covers is still where it was and unchanged.
@@ -313,9 +396,15 @@ pub fn run(rx: Receiver<Request>, hwnd: isize) {
     }
     let hwnd = HWND(hwnd as *mut c_void);
     let mut current: Option<Current> = None;
+    // A request that arrived while prefetching; handled next.
+    let mut backlog: Option<Request> = None;
 
     loop {
-        let first = match rx.recv_timeout(UNLOAD_AFTER) {
+        let next = match backlog.take() {
+            Some(r) => Ok(r),
+            None => rx.recv_timeout(UNLOAD_AFTER),
+        };
+        let first = match next {
             Ok(r) => r,
             Err(RecvTimeoutError::Timeout) => {
                 // Idle: give back the ~80 MB the Vietnamese model holds; it
@@ -327,11 +416,14 @@ pub fn run(rx: Receiver<Request>, hwnd: isize) {
             }
             Err(RecvTimeoutError::Disconnected) => break,
         };
-        // Coalesce queued requests: the newest Detect wins; Forget clears state.
+        // Coalesce queued requests: the newest Detect wins, then prefetches;
+        // Forget clears state.
         let mut detect = None;
+        let mut prefetch = None;
         let mut revalidate = false;
         let mut handle = |r: Request, current: &mut Option<Current>| match r {
             Request::Detect(pt) => detect = Some(pt),
+            Request::Prefetch(pt) => prefetch = Some(pt),
             Request::Revalidate => revalidate = true,
             Request::Forget => *current = None,
         };
@@ -341,18 +433,47 @@ pub fn run(rx: Receiver<Request>, hwnd: isize) {
         }
 
         if let Some(pt) = detect {
-            match detector.detect(pt) {
-                Ok(Some((data, cur))) => {
-                    current = Some(cur);
-                    let ptr = Box::into_raw(Box::new(data));
-                    unsafe {
-                        if PostMessageW(Some(hwnd), WM_APP_SHOW, WPARAM(0), LPARAM(ptr as isize)).is_err() {
-                            drop(Box::from_raw(ptr));
-                        }
+            let mut report = |stage: Stage, data: OcrData| {
+                let msg = match stage {
+                    Stage::Show => WM_APP_SHOW,
+                    Stage::Update => WM_APP_UPDATE,
+                };
+                let ptr = Box::into_raw(Box::new(data));
+                unsafe {
+                    if PostMessageW(Some(hwnd), msg, WPARAM(0), LPARAM(ptr as isize)).is_err() {
+                        drop(Box::from_raw(ptr));
                     }
                 }
+            };
+            match detector.detect(pt, true, &mut report) {
+                Ok(Some(cur)) => current = Some(cur),
                 Ok(None) => {}
                 Err(e) => log(format!("detect error: {e}")),
+            }
+        } else if let Some(pt) = prefetch {
+            // Fill the cache only; the overlay appears when the cursor arrives.
+            // A window that just opened may not show its image yet, so retry
+            // for a while, giving way as soon as the cursor needs the worker.
+            for attempt in 0..PREFETCH_TRIES {
+                if attempt > 0 {
+                    std::thread::sleep(PREFETCH_RETRY);
+                    if let Ok(r) = rx.try_recv() {
+                        backlog = Some(r);
+                        break;
+                    }
+                }
+                match detector.detect(pt, false, &mut |_, _| {}) {
+                    Ok(Some(cur)) => {
+                        let c = cur.clip;
+                        log(format!("prefetch at ({}, {}): cached, clip ({}, {}) - ({}, {})", pt.x, pt.y, c.left, c.top, c.right, c.bottom));
+                        break;
+                    }
+                    Ok(None) => log(format!("prefetch at ({}, {}): nothing yet", pt.x, pt.y)),
+                    Err(e) => {
+                        log(format!("prefetch error: {e}"));
+                        break;
+                    }
+                }
             }
         } else if revalidate {
             if let Some(cur) = &current {
@@ -375,9 +496,10 @@ pub fn probe(pt: POINT) -> Result<()> {
     let mut detector = Detector::new()?;
     detector.ignore_cursor = true;
     println!("OCR language: {}", detector.engine_language());
-    match detector.detect(pt)? {
-        None => println!("no image with text at ({}, {})", pt.x, pt.y),
-        Some((data, _)) => {
+    let mut last = None;
+    let found = detector.detect(pt, true, &mut |_, data| last = Some(data))?;
+    match (found, last) {
+        (Some(_), Some(data)) => {
             let r = data.rect;
             println!("image rect: ({}, {}) - ({}, {})", r.left, r.top, r.right, r.bottom);
             let all: Vec<usize> = (0..data.words.len()).collect();
@@ -390,6 +512,7 @@ pub fn probe(pt: POINT) -> Result<()> {
                 }
             }
         }
+        _ => println!("no image with text at ({}, {})", pt.x, pt.y),
     }
     Ok(())
 }
@@ -500,37 +623,46 @@ fn image_from_pixels(pt: POINT) -> Result<Option<RECT>> {
 /// left, top, right, bottom in capture pixels.
 type Box4 = (f32, f32, f32, f32);
 
-/// Re-reads one text line with VieSVTR. `boxes` are Windows OCR's word boxes
-/// for the line; the returned words get boxes from where in the line each of
-/// their characters was read.
-fn read_line(
-    rec: &mut viet::Recognizer,
-    px: &[u8],
+/// A text line cut out of the capture for VieSVTR.
+struct Crop {
+    px: Vec<u8>,
     w: usize,
     h: usize,
-    boxes: &[(Box4, String)],
-) -> std::result::Result<Vec<(Box4, String)>, String> {
+    /// Left edge of the crop in the capture.
+    x0: usize,
+    /// The line's top and bottom (without the tone-mark padding).
+    top: f32,
+    bottom: f32,
+}
+
+/// Cuts out the line covered by Windows OCR's word `boxes`, padded so tone
+/// marks above and dots below the reported box are included.
+fn crop_line(px: &[u8], w: usize, h: usize, boxes: &[(Box4, String)]) -> Option<Crop> {
     if boxes.is_empty() {
-        return Ok(Vec::new());
+        return None;
     }
     let (l, t, r, b) = boxes.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |a, (bx, _)| {
         (a.0.min(bx.0), a.1.min(bx.1), a.2.max(bx.2), a.3.max(bx.3))
     });
     let lh = (b - t).max(1.0);
-    // Tone marks sit above, and dots below, the box Windows OCR reports.
     let cx0 = (l - 0.2 * lh).max(0.0) as usize;
     let cy0 = (t - 0.35 * lh).max(0.0) as usize;
     let cx1 = ((r + 0.2 * lh).ceil() as usize).min(w);
     let cy1 = ((b + 0.2 * lh).ceil() as usize).min(h);
     if cx1 <= cx0 + 1 || cy1 <= cy0 + 1 {
-        return Ok(Vec::new());
+        return None;
     }
-    let (cw, ch) = (cx1 - cx0, cy1 - cy0);
-    let mut crop = Vec::with_capacity(cw * ch * 4);
+    let mut crop = Vec::with_capacity((cx1 - cx0) * (cy1 - cy0) * 4);
     for y in cy0..cy1 {
         crop.extend_from_slice(&px[(y * w + cx0) * 4..(y * w + cx1) * 4]);
     }
+    Some(Crop { px: crop, w: cx1 - cx0, h: cy1 - cy0, x0: cx0, top: t, bottom: b })
+}
 
+/// Turns VieSVTR's characters for one line into words. Each word's box comes
+/// from where in the line its characters were read.
+fn words_from_chars(crop: &Crop, chars: &[viet::RecChar], boxes: &[(Box4, String)]) -> Vec<(Box4, String)> {
+    let (t, b, cw, cx0) = (crop.top, crop.bottom, crop.w, crop.x0);
     let to_x = |f: f32| cx0 as f32 + f * cw as f32;
     let mut out = Vec::new();
     let mut word = String::new();
@@ -542,7 +674,7 @@ fn read_line(
         }
         word.clear();
     };
-    for c in rec.recognize(&crop, cw, ch)? {
+    for c in chars {
         if c.ch == ' ' {
             flush(&mut word, &mut span);
             continue;
@@ -561,7 +693,7 @@ fn read_line(
             o.0 = *b;
         }
     }
-    Ok(out)
+    out
 }
 
 /// Debug helper: writes a top-down BGRA buffer as a 32-bit BMP.
@@ -669,6 +801,43 @@ fn capture(r: RECT, out_w: i32, out_h: i32) -> Result<Vec<u8>> {
         }
         Ok(pixels)
     }
+}
+
+/// Hash of `clip` once two captures in a row agree (starting from the hash of
+/// a capture just taken), or `None` if it is still changing after
+/// `SETTLE_TIMEOUT`.
+fn stable_hash(clip: RECT, first: u64) -> Result<Option<u64>> {
+    let (w, h) = (clip.right - clip.left, clip.bottom - clip.top);
+    let start = Instant::now();
+    let mut prev = first;
+    loop {
+        std::thread::sleep(SETTLE_STEP);
+        let next = hash_pixels(&capture(clip, w, h)?, w, h);
+        if next == prev {
+            return Ok(Some(next));
+        }
+        if start.elapsed() >= SETTLE_TIMEOUT {
+            return Ok(None);
+        }
+        prev = next;
+    }
+}
+
+/// Converts per-line boxes in capture pixels to words in image coordinates.
+fn to_words(lines: &[Vec<(Box4, String)>], scale: f32) -> Vec<Word> {
+    let mut words = Vec::new();
+    for (li, boxes) in lines.iter().enumerate() {
+        for (b, text) in boxes {
+            let rect = RECT {
+                left: (b.0 / scale).floor() as i32,
+                top: (b.1 / scale).floor() as i32,
+                right: (b.2 / scale).ceil() as i32,
+                bottom: (b.3 / scale).ceil() as i32,
+            };
+            words.push(Word { rect, text: text.clone(), line: li });
+        }
+    }
+    words
 }
 
 fn hash_pixels(px: &[u8], w: i32, h: i32) -> u64 {

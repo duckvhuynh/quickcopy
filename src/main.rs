@@ -23,20 +23,23 @@ use windows::Win32::System::DataExchange::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::*;
 use windows::Win32::System::Ole::CF_UNICODETEXT;
+use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 
-use worker::{OcrData, Request, WM_APP_HIDE, WM_APP_SHOW, Word, log};
+use worker::{OcrData, Request, WM_APP_HIDE, WM_APP_SHOW, WM_APP_UPDATE, Word, log};
 
 const WM_APP_TRAY: u32 = WM_APP + 10;
 const TICK_TIMER: usize = 1;
 const FLASH_TIMER: usize = 2;
-const TICK_MS: u32 = 50;
+/// Cursor polling period; it bounds how late the dwell is noticed.
+const TICK_MS: u32 = 20;
 /// How long the cursor must rest before we look for an image under it.
-const DWELL: Duration = Duration::from_millis(300);
+/// Repeat visits are cache hits, so this is most of the wait on them.
+const DWELL: Duration = Duration::from_millis(150);
 /// How often we check that the covered image has not moved or changed.
 const REVALIDATE: Duration = Duration::from_millis(300);
 const FLASH_MS: u32 = 450;
@@ -62,9 +65,13 @@ struct App {
     data: Option<OcrData>,
     last_revalidate: Instant,
     drag: Drag,
-    anchor: usize,
     down_pt: POINT,
     sel: Option<(usize, usize)>,
+    /// Where the selection was made (start, end, whole line), so it can be
+    /// found again when the Vietnamese reading replaces the words.
+    sel_src: Option<(POINT, POINT, bool)>,
+    /// The user asked to copy before the Vietnamese reading arrived.
+    pending_copy: bool,
     flashing: bool,
     last_dblclk: Option<(Instant, POINT)>,
 }
@@ -165,9 +172,10 @@ fn main() -> Result<()> {
                 data: None,
                 last_revalidate: Instant::now(),
                 drag: Drag::None,
-                anchor: 0,
                 down_pt: POINT::default(),
                 sel: None,
+                sel_src: None,
+                pending_copy: false,
                 flashing: false,
                 last_dblclk: None,
             })
@@ -175,6 +183,17 @@ fn main() -> Result<()> {
 
         add_tray_icon(main);
         SetTimer(Some(main), TICK_TIMER, TICK_MS, None);
+        // Read images in newly activated windows (an image viewer opening)
+        // before the cursor gets to them.
+        let _ = SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            None,
+            Some(on_foreground),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        );
         log("running; hover an image, then double-click or drag over its text".into());
 
         let mut msg = MSG::default();
@@ -200,6 +219,11 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             with_app(|app| show(app, data));
             LRESULT(0)
         }
+        WM_APP_UPDATE => {
+            let data = unsafe { *Box::from_raw(lp.0 as *mut OcrData) };
+            with_app(|app| apply_update(app, data));
+            LRESULT(0)
+        }
         WM_APP_HIDE => {
             with_app(|app| {
                 if app.drag == Drag::None {
@@ -221,6 +245,26 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
     }
 }
 
+/// A window came to the front: prefetch the image at its center, if any, so
+/// it is already read when the cursor reaches it.
+unsafe extern "system" fn on_foreground(_: HWINEVENTHOOK, _: u32, hwnd: HWND, _: i32, _: i32, _: u32, _: u32) {
+    let mut r = RECT::default();
+    if hwnd.is_invalid() || unsafe { GetWindowRect(hwnd, &mut r) }.is_err() {
+        return;
+    }
+    let center = POINT { x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 };
+    // Only if that point really shows this window (not covered, not offscreen).
+    let at = unsafe { GetAncestor(WindowFromPoint(center), GA_ROOT) };
+    if at != unsafe { GetAncestor(hwnd, GA_ROOT) } {
+        return;
+    }
+    with_app(|app| {
+        if !app.paused {
+            let _ = app.tx.send(Request::Prefetch(center));
+        }
+    });
+}
+
 fn tick(app: &mut App) {
     let mut pos = POINT::default();
     if unsafe { GetCursorPos(&mut pos) }.is_err() {
@@ -229,7 +273,9 @@ fn tick(app: &mut App) {
     let now = Instant::now();
 
     if let Some(data) = &app.data {
-        if app.drag == Drag::None && !app.flashing {
+        // Keep the overlay while a selection is in progress or a copy waits
+        // for the Vietnamese reading, even if the cursor wanders off.
+        if app.drag == Drag::None && !app.flashing && !app.pending_copy {
             if !contains(data.rect, pos) {
                 log("hide: cursor left the image".into());
                 hide(app);
@@ -291,8 +337,43 @@ fn hide(app: &mut App) {
         }
     }
     app.sel = None;
+    app.sel_src = None;
+    app.pending_copy = false;
     app.drag = Drag::None;
     app.flashing = false;
+}
+
+/// The Vietnamese reading arrived for the image on screen: swap the words in,
+/// find the selection again by where it was made, and finish a waiting copy.
+fn apply_update(app: &mut App, data: OcrData) {
+    if app.data.as_ref().is_none_or(|d| d.id != data.id) {
+        return;
+    }
+    app.data = Some(data);
+    if let Some((a, b, line)) = app.sel_src {
+        select_points(app, a, b, line);
+    }
+    if std::mem::take(&mut app.pending_copy) {
+        copy_selection(app);
+    } else {
+        render(app);
+    }
+}
+
+/// Selects the words from `a` to `b` (overlay coordinates), or the whole line
+/// at `a`, and remembers the points so the selection survives a word update.
+fn select_points(app: &mut App, a: POINT, b: POINT, line: bool) {
+    let Some(data) = &app.data else { return };
+    let (Some(ia), Some(ib)) = (nearest_word(data, a), nearest_word(data, b)) else { return };
+    app.sel = Some(if line {
+        let l = data.words[ia].line;
+        let first = data.words.iter().position(|w| w.line == l).unwrap_or(ia);
+        let last = data.words.iter().rposition(|w| w.line == l).unwrap_or(ia);
+        (first, last)
+    } else {
+        (ia.min(ib), ia.max(ib))
+    });
+    app.sel_src = Some((a, b, line));
 }
 
 // ------------------------------------------------------------- overlay window
@@ -327,6 +408,7 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
                 }
                 app.flashing = false;
                 app.sel = None;
+                app.sel_src = None;
                 render(app);
             });
             LRESULT(0)
@@ -358,23 +440,20 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
 }
 
 fn on_button_down(app: &mut App, pt: POINT) {
-    let Some(data) = &app.data else { return };
-    let Some(idx) = nearest_word(data, pt) else { return };
+    if app.data.is_none() {
+        return;
+    }
 
     // Third click right after a double-click selects the whole line.
     if let Some((t, p)) = app.last_dblclk.take() {
         let dbl = Duration::from_millis(unsafe { GetDoubleClickTime() } as u64);
         if t.elapsed() <= dbl && (p.x - pt.x).abs() <= 4 && (p.y - pt.y).abs() <= 4 {
-            let line = data.words[idx].line;
-            let first = data.words.iter().position(|w| w.line == line).unwrap_or(idx);
-            let last = data.words.iter().rposition(|w| w.line == line).unwrap_or(idx);
-            app.sel = Some((first, last));
+            select_points(app, pt, pt, true);
             copy_selection(app);
             return;
         }
     }
 
-    app.anchor = idx;
     app.down_pt = pt;
     app.drag = Drag::Pending;
     unsafe {
@@ -393,13 +472,10 @@ fn on_mouse_move(app: &mut App, pt: POINT) {
         app.drag = Drag::Active;
         app.flashing = false;
     }
-    let Some(data) = &app.data else { return };
-    if let Some(cur) = nearest_word(data, pt) {
-        let sel = (app.anchor.min(cur), app.anchor.max(cur));
-        if app.sel != Some(sel) {
-            app.sel = Some(sel);
-            render(app);
-        }
+    let before = app.sel;
+    select_points(app, app.down_pt, pt, false);
+    if app.sel != before {
+        render(app);
     }
 }
 
@@ -418,15 +494,20 @@ fn on_button_up(app: &mut App) {
 }
 
 fn on_double_click(app: &mut App, pt: POINT) {
-    let Some(data) = &app.data else { return };
-    let Some(idx) = nearest_word(data, pt) else { return };
-    app.sel = Some((idx, idx));
+    select_points(app, pt, pt, false);
     app.last_dblclk = Some((Instant::now(), pt));
     copy_selection(app);
 }
 
 fn copy_selection(app: &mut App) {
     let (Some(data), Some((a, b))) = (&app.data, app.sel) else { return };
+    if data.pending {
+        // Copy once the Vietnamese reading arrives (apply_update).
+        log("copy waits for the Vietnamese reading".into());
+        app.pending_copy = true;
+        render(app);
+        return;
+    }
     let indices: Vec<usize> = (a..=b).collect();
     let text = selection_text(&data.words, &indices);
     match set_clipboard(app.main, &text) {

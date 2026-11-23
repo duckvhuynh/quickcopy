@@ -16,6 +16,9 @@ const W_STRIDE: usize = 4;
 const W_MIN: usize = 32;
 const W_MAX: usize = 1600;
 const MODEL_FILE: &str = "models/viesvtr/viesvtr_v7.onnx";
+/// Lines per model run. Measured on a 14-line page: 1 line 320 ms,
+/// 4 lines 285 ms, 16 lines 350 ms (bigger batches pad too much).
+const MAX_BATCH: usize = 4;
 
 /// VietOCR's 229 characters; class i+1 is VOCAB[i], class 0 is the CTC blank.
 const VOCAB: &str = include_str!("vocab.txt");
@@ -47,37 +50,81 @@ impl Recognizer {
         // level explicitly is rejected by the 1.17 runtime Windows ships.
         let session = Session::builder(&env)
             .map_err(|e| err(&e))?
-            .with_intra_threads(4)
+            // 0 = one thread per physical core; measured fastest.
+            .with_intra_threads(0)
             .map_err(|e| err(&e))?
             .commit_from_file(path)
             .map_err(|e| err(&e))?;
         Ok(Self { session, vocab: VOCAB.chars().collect() })
     }
 
-    /// Recognizes one text line given as a top-down BGRA buffer.
-    pub fn recognize(&mut self, px: &[u8], w: usize, h: usize) -> Result<Vec<RecChar>, String> {
-        if w == 0 || h == 0 {
-            return Ok(Vec::new());
+    /// Recognizes text lines. Lines of similar width run together as one
+    /// batch, which is much faster than one model run per line.
+    pub fn recognize_batch(&mut self, lines: &[Line]) -> Result<Vec<Vec<RecChar>>, String> {
+        let mut out = vec![Vec::new(); lines.len()];
+        let mut order: Vec<(usize, usize)> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.w > 0 && l.h > 0)
+            .map(|(i, l)| (i, target_width(l.w, l.h)))
+            .collect();
+        order.sort_by_key(|&(_, tw)| tw);
+
+        let mut start = 0;
+        while start < order.len() {
+            // Grow the batch while the padding it costs stays under 50%.
+            let mut end = start + 1;
+            while end < order.len() && end - start < MAX_BATCH && order[end].1 * 2 <= order[start].1 * 3 {
+                end += 1;
+            }
+            let group = &order[start..end];
+            let wmax = group[group.len() - 1].1;
+            let plane = HEIGHT * wmax;
+            let mut input = vec![0f32; group.len() * 3 * plane];
+            for (b, &(i, tw)) in group.iter().enumerate() {
+                let line = &lines[i];
+                let one = preprocess(line.px, line.w, line.h, tw);
+                for c in 0..3 {
+                    for y in 0..HEIGHT {
+                        let src = &one[c * HEIGHT * tw + y * tw..][..tw];
+                        let dst = &mut input[b * 3 * plane + c * plane + y * wmax..][..wmax];
+                        dst[..tw].copy_from_slice(src);
+                        // Pad with the row's last pixel (background), not black.
+                        dst[tw..].fill(src[tw - 1]);
+                    }
+                }
+            }
+            let tensor = Tensor::from_array(([group.len(), 3, HEIGHT, wmax], input)).map_err(|e| e.to_string())?;
+            let outputs = self.session.run(ort::inputs![tensor]).map_err(|e| e.to_string())?;
+            let (shape, logits) = outputs[0].try_extract_tensor::<f32>().map_err(|e| e.to_string())?;
+            let dims: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
+            let (t, v) = match dims.as_slice() {
+                [n, t, v] if *n == group.len() => (*t, *v),
+                other => return Err(format!("unexpected output shape {other:?}")),
+            };
+            for (b, &(i, tw)) in group.iter().enumerate() {
+                // Only the steps covering this line's own width, not its padding.
+                let steps = (t * tw).div_ceil(wmax).clamp(1, t);
+                let rows = &logits[b * t * v..][..steps * v];
+                out[i] = ctc_greedy(rows, steps, v)
+                    .into_iter()
+                    .filter_map(|(class, t0, t1)| {
+                        let ch = *self.vocab.get(class.checked_sub(1)?)?;
+                        Some(RecChar { ch, x0: t0 as f32 / steps as f32, x1: (t1 + 1) as f32 / steps as f32 })
+                    })
+                    .collect();
+            }
+            start = end;
         }
-        let tw = target_width(w, h);
-        let input = preprocess(px, w, h, tw);
-        let tensor = Tensor::from_array(([1usize, 3, HEIGHT, tw], input)).map_err(|e| e.to_string())?;
-        let outputs = self.session.run(ort::inputs![tensor]).map_err(|e| e.to_string())?;
-        let (shape, logits) = outputs[0].try_extract_tensor::<f32>().map_err(|e| e.to_string())?;
-        // Expected [1, T, classes].
-        let dims: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
-        let (t, v) = match dims.as_slice() {
-            [1, t, v] => (*t, *v),
-            other => return Err(format!("unexpected output shape {other:?}")),
-        };
-        Ok(ctc_greedy(logits, t, v)
-            .into_iter()
-            .filter_map(|(class, t0, t1)| {
-                let ch = *self.vocab.get(class.checked_sub(1)?)?;
-                Some(RecChar { ch, x0: t0 as f32 / t as f32, x1: (t1 + 1) as f32 / t as f32 })
-            })
-            .collect())
+        Ok(out)
     }
+}
+
+/// One text line crop: top-down BGRA pixels.
+pub struct Line<'a> {
+    pub px: &'a [u8],
+    pub w: usize,
+    pub h: usize,
 }
 
 /// Looks for the model next to the executable, then in its parent folders

@@ -11,17 +11,25 @@ Vietnamese.
 
 ## How it works
 
-1. When the cursor rests for 300 ms, UI Automation is asked whether there is
+1. When the cursor rests for 150 ms, UI Automation is asked whether there is
    an image under it. Apps that expose no accessibility tree (Electron apps
    like Zalo) fall back to finding the image rectangle from pixels
    (`src/rectfind.rs`).
 2. The image is captured with GDI, upscaled 2x and run through Windows OCR,
-   which finds the lines and words.
-3. In Vietnamese mode each line is re-read by
+   which finds the lines and words. The overlay appears right away, so text
+   can be selected while step 3 runs.
+3. In Vietnamese mode the lines are re-read by
    [VieSVTR](https://huggingface.co/ngocthua830/viesvtr), because Windows OCR
-   has no Vietnamese recognizer (`src/viet.rs`).
+   has no Vietnamese recognizer (`src/viet.rs`). A copy made before it
+   finishes waits for it, so the clipboard always gets the Vietnamese text.
 4. A transparent overlay is laid over the text lines only, so clicks elsewhere
    on the image still reach the app underneath.
+5. Results are cached by pixel hash. When a window comes to the front (an
+   image viewer opening), the image at its center is read ahead of time, so
+   it is ready when the cursor gets there.
+
+Measured on a 14-line Vietnamese page: overlay ~370 ms after the cursor
+rests on a new image (~200 ms on one already read), Vietnamese text ~500 ms.
 
 ## Build
 
