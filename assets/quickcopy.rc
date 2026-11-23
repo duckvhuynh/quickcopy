@@ -2,3 +2,39 @@
 1 ICON "icon.ico"
 2 ICON "tray-white.ico"
 3 ICON "tray-black.ico"
+
+// asInvoker, Windows 10/11, per-monitor v2 DPI (main.rs also sets it at
+// startup), UTF-8 code page.
+1 24 "quickcopy.exe.manifest"
+
+// Written by build.rs from CARGO_PKG_VERSION.
+#include "version.h"
+
+1 VERSIONINFO
+FILEVERSION QC_VERSION_BIN
+PRODUCTVERSION QC_VERSION_BIN
+FILEFLAGSMASK 0x3F
+FILEFLAGS 0x0
+FILEOS 0x40004
+FILETYPE 0x1
+FILESUBTYPE 0x0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "duckvhuynh"
+            VALUE "FileDescription", "QuickCopy: select and copy text in any on-screen image"
+            VALUE "FileVersion", QC_VERSION_STR
+            VALUE "InternalName", "quickcopy.exe"
+            VALUE "LegalCopyright", "Copyright (c) 2026 duckvhuynh"
+            VALUE "OriginalFilename", "quickcopy.exe"
+            VALUE "ProductName", "QuickCopy"
+            VALUE "ProductVersion", QC_VERSION_STR
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked
+
+      # Tests that need the VieSVTR model return early when it is missing,
+      # and it is never in the checkout.
+      - name: Test
+        run: cargo test --release --locked
+
+      # Reports clippy's findings without failing the build; the code has
+      # a few style lints left.
+      - name: Clippy
+        continue-on-error: true
+        run: cargo clippy --release --locked --all-targets
+
+      - name: Package
+        shell: pwsh
+        run: ./scripts/package.ps1 -NoBuild
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: quickcopy-windows-x64
+          path: dist/
+          if-no-files-found: error
+
+  # The OCR, overlay and tray are Win32; this job tracks the platform-
+  # independent part. Allowed to fail until the Linux port makes it build.
+  linux:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check
+        run: cargo check --locked
+      - name: Test
+        run: cargo test --locked
