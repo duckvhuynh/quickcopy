@@ -102,6 +102,8 @@ struct App {
     /// The user asked to copy before the Vietnamese reading arrived.
     pending_copy: bool,
     flashing: bool,
+    /// The system accent, read when the overlay is shown.
+    selection_color: theme::Rgb,
     last_dblclk: Option<(Instant, POINT)>,
     /// A translation request is out.
     translating: bool,
@@ -256,6 +258,7 @@ fn main() -> Result<()> {
                 prev_foreground: HWND::default(),
                 pending_copy: false,
                 flashing: false,
+                selection_color: theme::get().selection,
                 last_dblclk: None,
                 translating: false,
                 translation: None,
@@ -344,6 +347,8 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             let event = (lp.0 & 0xFFFF) as u32;
             if event == WM_RBUTTONUP || event == WM_CONTEXTMENU {
                 tray_menu(hwnd);
+            } else if event == WM_LBUTTONDBLCLK {
+                settings_ui::open(hwnd);
             }
             LRESULT(0)
         }
@@ -430,6 +435,10 @@ fn show(app: &mut App, data: OcrData) {
     if app.paused || !contains(data.rect, pos) || app.data.is_some() {
         return;
     }
+    theme::refresh();
+    app.selection_color = theme::get().selection;
+    theme::refresh();
+    app.selection_color = theme::get().selection;
     let r = data.rect;
     log(format!("overlay {}x{} at ({}, {}), {} words", r.right - r.left, r.bottom - r.top, r.left, r.top, data.words.len()));
     app.model = Some(TextModel::new(&data.words, &data.lines));
@@ -537,6 +546,15 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
         y: ((lp.0 >> 16) & 0xFFFF) as i16 as i32,
     };
     match msg {
+        // Broadcast to top-level windows only (not the message-only main
+        // window): light/dark or the accent changed.
+        WM_SETTINGCHANGE => {
+            theme::refresh();
+            if let Some(main) = with_app(|app| app.main) {
+                refresh_tray_icon(main);
+            }
+            LRESULT(0)
+        }
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         WM_ACTIVATE => {
             // Lost focus (click elsewhere, Alt+Tab): the selection goes, as
@@ -1139,7 +1157,8 @@ fn render(app: &App) {
             } else if app.translating {
                 pixel(0xF5, 0x9E, 0x0B, 0x60) // waiting for the translation
             } else {
-                pixel(0x26, 0x84, 0xFF, 0x60)
+                let [r, g, b] = app.selection_color;
+                pixel(r as u32, g as u32, b as u32, 0x60)
             };
             for r in model.highlight(app.anchor, app.focus) {
                 fill_rounded(px, w, h, inflate(r, 1, 2), color);
@@ -1303,12 +1322,34 @@ fn tray_data(main: HWND) -> NOTIFYICONDATAW {
         uID: 1,
         uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP,
         uCallbackMessage: WM_APP_TRAY,
-        hIcon: unsafe { LoadIconW(None, IDI_APPLICATION) }.unwrap_or_default(),
+        hIcon: tray_icon(),
         ..Default::default()
     };
     let tip: Vec<u16> = i18n::t().tooltip.encode_utf16().take(nid.szTip.len() - 1).collect();
     nid.szTip[..tip.len()].copy_from_slice(&tip);
     nid
+}
+
+/// Icon resource ids (assets/quickcopy.rc).
+pub const ICON_APP: u16 = 1;
+/// White glyph, for a dark taskbar.
+const ICON_TRAY_WHITE: u16 = 2;
+/// Dark glyph, for a light taskbar.
+const ICON_TRAY_BLACK: u16 = 3;
+
+pub fn load_icon(id: u16, size: i32) -> HICON {
+    unsafe {
+        let Ok(instance) = GetModuleHandleW(None) else { return HICON::default() };
+        LoadImageW(Some(instance.into()), PCWSTR(id as usize as *const u16), IMAGE_ICON, size, size, LR_SHARED)
+            .map(|h| HICON(h.0))
+            .unwrap_or_default()
+    }
+}
+
+/// The glyph that reads on the taskbar's own light or dark color.
+fn tray_icon() -> HICON {
+    let id = if theme::taskbar_light() { ICON_TRAY_BLACK } else { ICON_TRAY_WHITE };
+    load_icon(id, unsafe { GetSystemMetrics(SM_CXSMICON) })
 }
 
 fn add_tray_icon(main: HWND) {
@@ -1317,7 +1358,8 @@ fn add_tray_icon(main: HWND) {
     }
 }
 
-/// Shows the tooltip in the current app language.
+/// Shows the tooltip in the current app language and the icon for the
+/// current taskbar color.
 pub fn refresh_tray_icon(main: HWND) {
     unsafe {
         let _ = Shell_NotifyIconW(NIM_MODIFY, &tray_data(main));
@@ -1342,9 +1384,9 @@ fn tray_menu(main: HWND) {
         main,
         at,
         vec![
-            menu::Entry { label: t.settings.into(), id: MENU_SETTINGS, checked: false, separator: false },
-            menu::Entry { label: t.pause.into(), id: MENU_PAUSE, checked: paused, separator: false },
-            menu::Entry { label: t.quit.into(), id: MENU_QUIT, checked: false, separator: true },
+            menu::Entry { label: t.settings.into(), id: MENU_SETTINGS, checked: false },
+            menu::Entry { label: t.pause.into(), id: MENU_PAUSE, checked: paused },
+            menu::Entry { label: t.quit.into(), id: MENU_QUIT, checked: false },
         ],
     );
 }

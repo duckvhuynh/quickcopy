@@ -1,0 +1,4 @@
+// Ids match ICON_* in src/main.rs. The first icon is the exe's icon.
+1 ICON "icon.ico"
+2 ICON "tray-white.ico"
+3 ICON "tray-black.ico"

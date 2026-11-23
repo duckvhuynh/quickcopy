@@ -84,7 +84,12 @@ quickcopy --probe X Y            # detect and OCR the image at a screen point
 ```
 
 Debug builds log to the console. Release builds log to stderr when `QC_LOG`
-is set. `QC_ENGLISH=1` forces Windows OCR only.
+is set. `QC_ENGLISH=1` forces Windows OCR only. `QC_THEME=light` or `dark`
+overrides the Windows app mode (the UI otherwise follows it and the accent
+color).
+
+The icons in `assets/` are built from the PNG masters with
+`python tools/icons.py`.
 
 ## Known limitations
 

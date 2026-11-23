@@ -90,6 +90,8 @@ pub fn open(main: HWND) {
         ui.capturing = false;
         ui.error = None;
         let _ = unsafe { SetWindowTextW(ui.hwnd, &HSTRING::from(title())) };
+        theme::refresh();
+        apply_frame(ui.hwnd);
         invalidate(ui);
         ui.hwnd
     }) {
@@ -107,7 +109,8 @@ pub fn open(main: HWND) {
             hInstance: instance.into(),
             lpszClassName: class,
             hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-            hbrBackground: CreateSolidBrush(COLORREF(rgb(theme::PANEL))),
+            hIcon: crate::load_icon(crate::ICON_APP, GetSystemMetrics(SM_CXICON)),
+            hbrBackground: CreateSolidBrush(COLORREF(rgb(theme::get().panel))),
             ..Default::default()
         });
         // Caption with only the close button (no minimize or maximize).
@@ -128,14 +131,8 @@ pub fn open(main: HWND) {
         ) else {
             return;
         };
-        // Dark title bar in the panel color, so the window's own border is
-        // the only one.
-        let on: BOOL = TRUE;
-        let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, (&on as *const BOOL).cast(), size_of::<BOOL>() as u32);
-        let caption = COLORREF(rgb(theme::PANEL));
-        let _ = DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, (&caption as *const COLORREF).cast(), size_of::<COLORREF>() as u32);
-        let border = COLORREF(rgb(theme::WINDOW_BORDER));
-        let _ = DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, (&border as *const COLORREF).cast(), size_of::<COLORREF>() as u32);
+        theme::refresh();
+        apply_frame(hwnd);
 
         // Size the client area for this monitor's scale, centered on it.
         let s = scale(hwnd);
@@ -158,6 +155,20 @@ pub fn open(main: HWND) {
         });
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = SetForegroundWindow(hwnd);
+    }
+}
+
+/// Title bar in the panel color (light or dark, like the system), so the
+/// window's own border is the only one.
+fn apply_frame(hwnd: HWND) {
+    let p = theme::get();
+    let dark: BOOL = p.dark.into();
+    let caption = COLORREF(rgb(p.panel));
+    let border = COLORREF(rgb(p.window_border));
+    unsafe {
+        let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, (&dark as *const BOOL).cast(), size_of::<BOOL>() as u32);
+        let _ = DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, (&caption as *const COLORREF).cast(), size_of::<COLORREF>() as u32);
+        let _ = DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, (&border as *const COLORREF).cast(), size_of::<COLORREF>() as u32);
     }
 }
 
@@ -434,6 +445,7 @@ struct Pen<'a> {
     target: &'a ID2D1HwndRenderTarget,
     dwrite: &'a IDWriteFactory,
     s: f32,
+    p: theme::Palette,
 }
 
 impl Pen<'_> {
@@ -471,7 +483,7 @@ impl Pen<'_> {
     }
 
     fn toggle(&self, r: D2D_RECT_F, on: bool, enabled: bool) -> Result<()> {
-        let (track, knob) = if on { (theme::TEXT, theme::WINDOW) } else { ([70, 70, 70], [170, 170, 170]) };
+        let (track, knob) = if on { (self.p.accent, self.p.on_accent) } else { self.p.toggle_off };
         let a = if enabled { 1.0 } else { 0.4 };
         let h = r.bottom - r.top;
         self.rounded(r, h / 2.0 / self.s, Some((track, a)), None)?;
@@ -494,69 +506,66 @@ fn paint(ui: &mut Ui) -> Result<()> {
             ui.target = Some(unsafe { f.d2d.CreateHwndRenderTarget(&props, &hprops)? });
         }
         let target = ui.target.as_ref().expect("created above");
-        let pen = Pen { target, dwrite: &f.dwrite, s: scale(hwnd) };
+        let p = theme::get();
+        let pen = Pen { target, dwrite: &f.dwrite, s: scale(hwnd), p };
         let l = layout(hwnd);
         let t = i18n::t();
         let prefs = settings::get();
         unsafe {
             target.BeginDraw();
             target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-            target.Clear(Some(&paint::rgba(theme::PANEL, 1.0)));
+            target.Clear(Some(&paint::rgba(p.panel, 1.0)));
         }
         let hover = |h: Hit| ui.hover == h;
         let row_text = |i: usize| D2D_RECT_F { left: l.rows[i].left + PAD * l.s, ..l.rows[i] };
 
         match &ui.mode {
             Mode::Rows => {
-                for row in &l.rows[1..] {
-                    let line = D2D_RECT_F { left: row.left + PAD * l.s, right: row.right - PAD * l.s, top: row.top, bottom: row.top + 1.0 };
-                    unsafe { target.FillRectangle(&line, &pen.brush(theme::SEPARATOR.0, theme::SEPARATOR.1)?) };
-                }
                 // Start with Windows
-                pen.text(t.start_with_windows, row_text(0), TEXT_PX, 400, theme::TEXT, false)?;
+                pen.text(t.start_with_windows, row_text(0), TEXT_PX, 400, p.text, false)?;
                 pen.toggle(l.start_toggle, settings::start_with_windows(), true)?;
 
                 // Translate into
-                pen.text(t.translate_into, row_text(1), TEXT_PX, 400, theme::TEXT, false)?;
-                let fill = if hover(Hit::Language) { Some((theme::HOVER.0, theme::HOVER.1)) } else { None };
-                pen.rounded(l.language, theme::CONTROL_RADIUS, fill, Some((theme::CONTROL_BORDER.0, theme::CONTROL_BORDER.1)))?;
+                pen.text(t.translate_into, row_text(1), TEXT_PX, 400, p.text, false)?;
+                let fill = if hover(Hit::Language) { Some((p.hover.0, p.hover.1)) } else { None };
+                pen.rounded(l.language, theme::CONTROL_RADIUS, fill, Some((p.control_border.0, p.control_border.1)))?;
                 let inner = D2D_RECT_F { left: l.language.left + 10.0 * l.s, right: l.language.right - 10.0 * l.s, ..l.language };
-                pen.text(i18n::language_name(&prefs.target_language), inner, TEXT_PX, 400, theme::TEXT, false)?;
-                pen.text("›", inner, TEXT_PX + 2.0, 400, theme::SUBTLE, true)?;
+                pen.text(i18n::language_name(&prefs.target_language), inner, TEXT_PX, 400, p.text, false)?;
+                pen.text("›", inner, TEXT_PX + 2.0, 400, p.subtle, true)?;
 
                 // Translate shortcut
                 let mut label_row = row_text(2);
                 if let Some(error) = ui.error {
                     label_row.bottom = (label_row.top + label_row.bottom) / 2.0 + 2.0 * l.s;
                     let below = D2D_RECT_F { top: label_row.bottom - 2.0 * l.s, bottom: l.rows[2].bottom - 4.0 * l.s, ..row_text(2) };
-                    pen.text(error, below, SMALL_PX - 1.0, 400, [235, 120, 110], false)?;
+                    pen.text(error, below, SMALL_PX - 1.0, 400, p.error, false)?;
                 }
-                pen.text(t.translate_shortcut, label_row, TEXT_PX, 400, theme::TEXT, false)?;
-                let border = if ui.capturing { (theme::TEXT, 0.9) } else { theme::CONTROL_BORDER };
-                let fill = if hover(Hit::Shortcut) && !ui.capturing { Some((theme::HOVER.0, theme::HOVER.1)) } else { None };
+                pen.text(t.translate_shortcut, label_row, TEXT_PX, 400, p.text, false)?;
+                let border = if ui.capturing { (p.accent, 1.0) } else { p.control_border };
+                let fill = if hover(Hit::Shortcut) && !ui.capturing { Some((p.hover.0, p.hover.1)) } else { None };
                 pen.rounded(l.shortcut, theme::CONTROL_RADIUS, fill, Some(border))?;
                 let inner = D2D_RECT_F { left: l.shortcut.left + 10.0 * l.s, right: l.shortcut.right - 10.0 * l.s, ..l.shortcut };
                 if ui.capturing {
-                    pen.text(t.press_shortcut, inner, TEXT_PX, 400, theme::SUBTLE, false)?;
+                    pen.text(t.press_shortcut, inner, TEXT_PX, 400, p.subtle, false)?;
                 } else {
-                    pen.text(&prefs.translate_shortcut.label(), inner, TEXT_PX, 400, theme::TEXT, false)?;
+                    pen.text(&prefs.translate_shortcut.label(), inner, TEXT_PX, 400, p.text, false)?;
                 }
 
                 // App language: segmented English | Tiếng Việt
-                pen.text(t.app_language, row_text(3), TEXT_PX, 400, theme::TEXT, false)?;
+                pen.text(t.app_language, row_text(3), TEXT_PX, 400, p.text, false)?;
                 let ui_box = D2D_RECT_F { right: l.ui_vi.right, ..l.ui_en };
-                pen.rounded(ui_box, theme::CONTROL_RADIUS, None, Some((theme::CONTROL_BORDER.0, theme::CONTROL_BORDER.1)))?;
+                pen.rounded(ui_box, theme::CONTROL_RADIUS, None, Some((p.control_border.0, p.control_border.1)))?;
                 for (r, lang, label) in [(l.ui_en, UiLang::En, "English"), (l.ui_vi, UiLang::Vi, "Tiếng Việt")] {
                     let selected = prefs.ui_language == lang;
                     let seg = D2D_RECT_F { left: r.left + 2.0 * l.s, top: r.top + 2.0 * l.s, right: r.right - 2.0 * l.s, bottom: r.bottom - 2.0 * l.s };
                     if selected {
-                        pen.rounded(seg, theme::CONTROL_RADIUS - 1.0, Some((theme::TEXT, 1.0)), None)?;
+                        pen.rounded(seg, theme::CONTROL_RADIUS - 1.0, Some((p.accent, 1.0)), None)?;
                     } else if hover(Hit::UiLang(lang)) {
-                        pen.rounded(seg, theme::CONTROL_RADIUS - 1.0, Some((theme::HOVER.0, theme::HOVER.1)), None)?;
+                        pen.rounded(seg, theme::CONTROL_RADIUS - 1.0, Some((p.hover.0, p.hover.1)), None)?;
                     }
                     let lw = paint::measure(label, TEXT_PX * l.s, 400);
                     let centered = D2D_RECT_F { left: (r.left + r.right - lw) / 2.0, ..r };
-                    pen.text(label, centered, TEXT_PX, 400, if selected { theme::WINDOW } else { theme::TEXT }, false)?;
+                    pen.text(label, centered, TEXT_PX, 400, if selected { p.on_accent } else { p.text }, false)?;
                 }
 
                 // Vietnamese text recognition (needs the model)
@@ -565,27 +574,27 @@ fn paint(ui: &mut Ui) -> Result<()> {
                 if !model {
                     label_row.bottom = (label_row.top + label_row.bottom) / 2.0 + 2.0 * l.s;
                     let below = D2D_RECT_F { top: label_row.bottom - 2.0 * l.s, bottom: l.rows[4].bottom - 4.0 * l.s, ..row_text(4) };
-                    pen.text(t.vietnamese_ocr_missing, below, SMALL_PX - 1.0, 400, theme::SUBTLE, false)?;
+                    pen.text(t.vietnamese_ocr_missing, below, SMALL_PX - 1.0, 400, p.subtle, false)?;
                 }
-                pen.text(t.vietnamese_ocr, label_row, TEXT_PX, 400, if model { theme::TEXT } else { theme::SUBTLE }, false)?;
+                pen.text(t.vietnamese_ocr, label_row, TEXT_PX, 400, if model { p.text } else { p.subtle }, false)?;
                 pen.toggle(l.ocr_toggle, model && prefs.vietnamese_ocr, model)?;
             }
             Mode::Picker { query, scroll, highlight } => {
                 // Search box
-                pen.rounded(l.search, theme::CONTROL_RADIUS, None, Some((theme::TEXT, 0.5)))?;
+                pen.rounded(l.search, theme::CONTROL_RADIUS, None, Some((p.accent, 1.0)))?;
                 let inner = D2D_RECT_F { left: l.search.left + 10.0 * l.s, right: l.search.right - 10.0 * l.s, ..l.search };
                 if query.is_empty() {
-                    pen.text(t.search_languages, inner, TEXT_PX, 400, theme::SUBTLE, false)?;
+                    pen.text(t.search_languages, inner, TEXT_PX, 400, p.subtle, false)?;
                 } else {
-                    let w = pen.text(query, inner, TEXT_PX, 400, theme::TEXT, false)?;
+                    let w = pen.text(query, inner, TEXT_PX, 400, p.text, false)?;
                     let caret = D2D_RECT_F { left: inner.left + w + 1.0, right: inner.left + w + 2.0, top: inner.top + 8.0 * l.s, bottom: inner.bottom - 8.0 * l.s };
-                    unsafe { target.FillRectangle(&caret, &pen.brush(theme::TEXT, 1.0)?) };
+                    unsafe { target.FillRectangle(&caret, &pen.brush(p.text, 1.0)?) };
                 }
                 // List, clipped to its area
                 let found = matches(query);
                 unsafe { target.PushAxisAlignedClip(&l.list, D2D1_ANTIALIAS_MODE_ALIASED) };
                 if found.is_empty() {
-                    pen.text(t.no_match, D2D_RECT_F { left: l.list.left + 10.0 * l.s, bottom: l.list.top + LIST_ROW_H * l.s, ..l.list }, TEXT_PX, 400, theme::SUBTLE, false)?;
+                    pen.text(t.no_match, D2D_RECT_F { left: l.list.left + 10.0 * l.s, bottom: l.list.top + LIST_ROW_H * l.s, ..l.list }, TEXT_PX, 400, p.subtle, false)?;
                 }
                 let row = LIST_ROW_H * l.s;
                 let first = (*scroll / row) as usize;
@@ -594,12 +603,12 @@ fn paint(ui: &mut Ui) -> Result<()> {
                     let top = l.list.top + i as f32 * row - scroll;
                     let r = D2D_RECT_F { left: l.list.left, top, right: l.list.right, bottom: top + row };
                     if hover(Hit::Pick(i)) || i == *highlight {
-                        pen.rounded(r, theme::HOVER_RADIUS, Some((theme::HOVER.0, theme::HOVER.1)), None)?;
+                        pen.rounded(r, theme::HOVER_RADIUS, Some((p.hover.0, p.hover.1)), None)?;
                     }
                     let inner = D2D_RECT_F { left: r.left + 10.0 * l.s, right: r.right - 10.0 * l.s, ..r };
-                    pen.text(name, inner, TEXT_PX, 400, theme::TEXT, false)?;
+                    pen.text(name, inner, TEXT_PX, 400, p.text, false)?;
                     if *code == prefs.target_language {
-                        pen.text("✓", inner, TEXT_PX, 600, theme::TEXT, true)?;
+                        pen.text("✓", inner, TEXT_PX, 600, p.accent, true)?;
                     }
                 }
                 unsafe { target.PopAxisAlignedClip() };
@@ -611,7 +620,7 @@ fn paint(ui: &mut Ui) -> Result<()> {
             Mode::Rows => format!("QuickCopy {}", env!("CARGO_PKG_VERSION")),
             Mode::Picker { .. } => "↑ ↓ Enter · Esc".to_string(),
         };
-        pen.text(&hint, footer, SMALL_PX - 1.0, 400, theme::SUBTLE, false)?;
+        pen.text(&hint, footer, SMALL_PX - 1.0, 400, p.subtle, false)?;
         unsafe { target.EndDraw(None, None) }
     });
     match drawn {
@@ -642,7 +651,18 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             }
             LRESULT(0)
         }
-        WM_ERASEBKGND => LRESULT(1),
+        // The panel color right away, so the window never flashes white
+        // before Direct2D's first paint.
+        WM_ERASEBKGND => {
+            let mut rc = RECT::default();
+            unsafe {
+                let _ = GetClientRect(hwnd, &mut rc);
+                let brush = CreateSolidBrush(COLORREF(rgb(theme::get().panel)));
+                FillRect(HDC(wp.0 as _), &rc, brush);
+                let _ = DeleteObject(brush.into());
+            }
+            LRESULT(1)
+        }
         WM_MOUSEMOVE => {
             with_ui(|ui| {
                 let hit = hit_test(ui, x, y);
@@ -695,6 +715,12 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         WM_SIZE => {
             with_ui(|ui| ui.target = None);
             LRESULT(0)
+        }
+        WM_SETTINGCHANGE | WM_THEMECHANGED | WM_DWMCOLORIZATIONCOLORCHANGED => {
+            theme::refresh();
+            apply_frame(hwnd);
+            with_ui(|ui| invalidate(ui));
+            unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
         }
         // The close button hides the window to the tray; Quit is in the tray menu.
         WM_CLOSE => {

@@ -149,8 +149,10 @@ impl Popover {
         self.scale = s;
         self.items = items;
         self.hover = None;
+        crate::theme::refresh();
+        crate::theme::refresh();
 
-        // Layout: [ label  hint ] | [ label  hint ] in a rounded panel that is
+        // Layout: [ label  hint ] [ label  hint ] in a rounded panel that is
         // the whole window. No drawn shadow around it: even nearly
         // transparent shadow pixels take clicks, and a drag starting next to
         // the menu landed on it.
@@ -212,17 +214,13 @@ impl Popover {
         paint::update_layered(self.hwnd, pos, self.size.cx, self.size.cy, |target, f| unsafe {
             paint::panel(target, self.panel, s)?;
             let rounded = |r: D2D_RECT_F, k: f32| D2D1_ROUNDED_RECT { rect: r, radiusX: k, radiusY: k };
-            let text = target.CreateSolidColorBrush(&paint::rgba(theme::TEXT, 1.0), None)?;
-            let hint = target.CreateSolidColorBrush(&paint::rgba(theme::SUBTLE, 1.0), None)?;
-            let hover = target.CreateSolidColorBrush(&paint::rgba(theme::HOVER.0, theme::HOVER.1), None)?;
-            let separator = target.CreateSolidColorBrush(&paint::rgba(theme::SEPARATOR.0, theme::SEPARATOR.1), None)?;
+            let p = theme::get();
+            let text = target.CreateSolidColorBrush(&paint::rgba(p.text, 1.0), None)?;
+            let hint = target.CreateSolidColorBrush(&paint::rgba(p.subtle, 1.0), None)?;
+            let hover = target.CreateSolidColorBrush(&paint::rgba(p.hover.0, p.hover.1), None)?;
             for (i, (item, b)) in self.items.iter().zip(&self.buttons).enumerate() {
                 if self.hover == Some(i) {
                     target.FillRoundedRectangle(&rounded(*b, theme::HOVER_RADIUS * s), &hover);
-                }
-                if i > 0 {
-                    let x = b.left - 1.0;
-                    target.FillRectangle(&D2D_RECT_F { left: x, top: b.top + 6.0 * s, right: x + 1.0, bottom: b.bottom - 6.0 * s }, &separator);
                 }
                 let label = paint::text_layout(&f.dwrite, item.label, LABEL_PX * s, 400)?;
                 let hint_layout = paint::text_layout(&f.dwrite, &item.hint, HINT_PX * s, 400)?;

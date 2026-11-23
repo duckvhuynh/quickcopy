@@ -23,8 +23,6 @@ pub struct Entry {
     /// Sent as the WM_COMMAND id.
     pub id: usize,
     pub checked: bool,
-    /// Draw a separator line above this entry.
-    pub separator: bool,
 }
 
 const TEXT_PX: f32 = 12.0;
@@ -33,7 +31,6 @@ const ITEM_H: f32 = 28.0;
 const PAD: f32 = 10.0;
 /// Room for the check mark on the right.
 const CHECK_W: f32 = 22.0;
-const SEPARATOR_H: f32 = 9.0;
 const MIN_W: f32 = 160.0;
 /// From Win32::UI::Controls, a large feature to enable for one constant.
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -71,16 +68,14 @@ pub fn show(owner: HWND, at: POINT, entries: Vec<Entry>) {
     let (mut dpi_x, mut dpi_y) = (96u32, 96u32);
     let _ = unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
     let s = dpi_x as f32 / 96.0;
+    crate::theme::refresh();
 
-    // Layout: one row per entry, separators as thin gaps.
+    // Layout: one row per entry.
     let widest = entries.iter().map(|e| paint::measure(&e.label, TEXT_PX * s, 400)).fold(0.0, f32::max);
     let w = (INSET + PAD + widest + CHECK_W + PAD + INSET).max(MIN_W) * s;
     let mut y = INSET * s;
     let mut rows = Vec::new();
-    for e in &entries {
-        if e.separator {
-            y += SEPARATOR_H * s;
-        }
+    for _ in &entries {
         rows.push(D2D_RECT_F { left: INSET * s, top: y, right: w - INSET * s, bottom: y + ITEM_H * s });
         y += ITEM_H * s;
     }
@@ -152,14 +147,11 @@ fn render(m: &Menu) {
     let panel = D2D_RECT_F { left: 0.0, top: 0.0, right: m.size.cx as f32, bottom: m.size.cy as f32 };
     paint::update_layered(m.hwnd, m.pos, m.size.cx, m.size.cy, |target, f| unsafe {
         paint::panel(target, panel, s)?;
-        let text = target.CreateSolidColorBrush(&paint::rgba(theme::TEXT, 1.0), None)?;
-        let hover = target.CreateSolidColorBrush(&paint::rgba(theme::HOVER.0, theme::HOVER.1), None)?;
-        let line = target.CreateSolidColorBrush(&paint::rgba(theme::SEPARATOR.0, theme::SEPARATOR.1), None)?;
+        let p = theme::get();
+        let text = target.CreateSolidColorBrush(&paint::rgba(p.text, 1.0), None)?;
+        let hover = target.CreateSolidColorBrush(&paint::rgba(p.hover.0, p.hover.1), None)?;
+        let check_brush = target.CreateSolidColorBrush(&paint::rgba(p.accent, 1.0), None)?;
         for (i, (e, r)) in m.entries.iter().zip(&m.rows).enumerate() {
-            if e.separator {
-                let y = (r.top - SEPARATOR_H * s / 2.0).round();
-                target.FillRectangle(&D2D_RECT_F { left: r.left + 6.0 * s, top: y, right: r.right - 6.0 * s, bottom: y + 1.0 }, &line);
-            }
             if m.hover == Some(i) {
                 let k = theme::HOVER_RADIUS * s;
                 target.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: *r, radiusX: k, radiusY: k }, &hover);
@@ -174,7 +166,7 @@ fn render(m: &Menu) {
                 let mut cm = DWRITE_TEXT_METRICS::default();
                 check.GetMetrics(&mut cm)?;
                 let x = r.right - PAD * s - cm.widthIncludingTrailingWhitespace;
-                target.DrawTextLayout(Vector2 { X: x, Y: mid - cm.height / 2.0 }, &check, &text, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                target.DrawTextLayout(Vector2 { X: x, Y: mid - cm.height / 2.0 }, &check, &check_brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
             }
         }
         Ok(())

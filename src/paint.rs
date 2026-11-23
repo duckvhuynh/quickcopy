@@ -282,15 +282,16 @@ pub(crate) fn update_layered(hwnd: HWND, pos: POINT, w: i32, h: i32, draw: impl 
     }
 }
 
-/// The rounded, bordered dark panel the popover and the tray menu sit on.
+/// The rounded, bordered panel the popover and the tray menu sit on.
 pub(crate) fn panel(target: &ID2D1DCRenderTarget, r: D2D_RECT_F, s: f32) -> Result<()> {
     use crate::theme;
+    let p = theme::get();
     let radius = theme::RADIUS * s;
     let rounded = |r: D2D_RECT_F| D2D1_ROUNDED_RECT { rect: r, radiusX: radius, radiusY: radius };
     unsafe {
-        target.FillRoundedRectangle(&rounded(r), &target.CreateSolidColorBrush(&rgba(theme::PANEL, 0.98), None)?);
+        target.FillRoundedRectangle(&rounded(r), &target.CreateSolidColorBrush(&rgba(p.panel, 0.98), None)?);
         let edge = D2D_RECT_F { left: r.left + 0.5, top: r.top + 0.5, right: r.right - 0.5, bottom: r.bottom - 0.5 };
-        target.DrawRoundedRectangle(&rounded(edge), &target.CreateSolidColorBrush(&rgba(theme::BORDER.0, theme::BORDER.1), None)?, 1.0, None);
+        target.DrawRoundedRectangle(&rounded(edge), &target.CreateSolidColorBrush(&rgba(p.border.0, p.border.1), None)?, 1.0, None);
     }
     Ok(())
 }
