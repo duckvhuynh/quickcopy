@@ -40,6 +40,9 @@ const TICK_MS: u32 = 20;
 /// How long the cursor must rest before we look for an image under it.
 /// Repeat visits are cache hits, so this is most of the wait on them.
 const DWELL: Duration = Duration::from_millis(150);
+/// Extra detection attempts while the cursor rests and nothing was found.
+const DETECT_RETRIES: u8 = 2;
+const DETECT_RETRY: Duration = Duration::from_millis(800);
 /// How often we check that the covered image has not moved or changed.
 const REVALIDATE: Duration = Duration::from_millis(300);
 const FLASH_MS: u32 = 450;
@@ -62,6 +65,8 @@ struct App {
     last_pos: POINT,
     still_since: Instant,
     requested: bool,
+    requested_at: Instant,
+    retries: u8,
     data: Option<OcrData>,
     last_revalidate: Instant,
     drag: Drag,
@@ -169,6 +174,8 @@ fn main() -> Result<()> {
                 last_pos: POINT::default(),
                 still_since: Instant::now(),
                 requested: false,
+                requested_at: Instant::now(),
+                retries: 0,
                 data: None,
                 last_revalidate: Instant::now(),
                 drag: Drag::None,
@@ -291,11 +298,23 @@ fn tick(app: &mut App) {
         app.last_pos = pos;
         app.still_since = now;
         app.requested = false;
+        app.retries = 0;
         return;
     }
     let button_down = unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } < 0;
-    if !app.paused && !app.requested && app.data.is_none() && !button_down && now - app.still_since >= DWELL {
+    if app.paused || app.data.is_some() || button_down || now - app.still_since < DWELL {
+        return;
+    }
+    // Ask once when the cursor settles, then a couple more times while it
+    // stays put: a page or viewer may still be loading, and a fresh Chrome
+    // window answers the first accessibility query before its tree exists.
+    let retry_due = app.requested && app.retries < DETECT_RETRIES && now - app.requested_at >= DETECT_RETRY;
+    if !app.requested || retry_due {
+        if app.requested {
+            app.retries += 1;
+        }
         app.requested = true;
+        app.requested_at = now;
         let _ = app.tx.send(Request::Detect(pos));
     }
 }
@@ -601,7 +620,7 @@ fn render(app: &App) {
 
         let hit = pixel(0, 0, 0, 1);
         for line in &data.lines {
-            fill(px, w, h, inflate(*line, 2, 3), hit);
+            fill(px, w, h, hit_area(*line), hit);
         }
         if let Some((a, b)) = app.sel {
             let color = if app.flashing { pixel(0x22, 0xC5, 0x5E, 0x70) } else { pixel(0x26, 0x84, 0xFF, 0x60) };
@@ -663,6 +682,15 @@ fn fill(px: &mut [u32], w: i32, h: i32, r: RECT, color: u32) {
 
 fn contains(r: RECT, p: POINT) -> bool {
     p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom
+}
+
+/// Where a line accepts the mouse. People start a drag a little before the
+/// first word or past the last one, so the line reaches well beyond its text
+/// sideways (twice its height, at least 24 px) and a little above and below.
+/// Points there select from the nearest word (see `nearest_word`).
+fn hit_area(line: RECT) -> RECT {
+    let h = line.bottom - line.top;
+    inflate(line, (2 * h).max(24), (h / 4).max(3))
 }
 
 fn inflate(r: RECT, dx: i32, dy: i32) -> RECT {

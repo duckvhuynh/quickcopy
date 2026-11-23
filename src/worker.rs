@@ -102,8 +102,8 @@ pub struct Detector {
     ignore_cursor: bool,
     viet: Option<viet::Recognizer>,
     viet_failed: bool,
-    /// Chromium content windows already given time to build a tree (see detect).
-    no_tree: std::collections::HashSet<isize>,
+    /// Chromium top-level windows already given time to build a tree (see detect).
+    waited: std::collections::HashSet<isize>,
 }
 
 /// Read text with the Vietnamese model (set from the tray menu).
@@ -124,7 +124,7 @@ impl Detector {
             ignore_cursor: false,
             viet: None,
             viet_failed: false,
-            no_tree: Default::default(),
+            waited: Default::default(),
         })
     }
 
@@ -150,18 +150,20 @@ impl Detector {
         // Chrome/Edge build their accessibility tree only after the first
         // query, so a fresh window looks empty like Zalo. Ask once more after
         // a moment; windows still empty then are remembered as pixel-only.
-        if control_type == UIA_PaneControlTypeId && self.is_chromium_without_tree(pt, &element) {
-            let window = unsafe { WindowFromPoint(pt) }.0 as isize;
-            if self.no_tree.insert(window) {
-                let start = Instant::now();
-                while start.elapsed() < TREE_WAIT {
-                    std::thread::sleep(Duration::from_millis(100));
-                    element = unsafe { self.uia.ElementFromPoint(pt)? };
-                    control_type = unsafe { element.CurrentControlType()? };
-                    if control_type != UIA_PaneControlTypeId || !self.is_chromium_without_tree(pt, &element) {
-                        log(format!("accessibility tree appeared after {:?}", start.elapsed()));
-                        self.no_tree.remove(&window);
-                        break;
+        // Before that they answer with a bare pane (the content area, or the
+        // frame's "View"), which is how this check recognizes them.
+        if control_type == UIA_PaneControlTypeId {
+            if let Some(root) = chromium_root(pt) {
+                if self.waited.insert(root) {
+                    let start = Instant::now();
+                    while start.elapsed() < TREE_WAIT {
+                        std::thread::sleep(Duration::from_millis(100));
+                        element = unsafe { self.uia.ElementFromPoint(pt)? };
+                        control_type = unsafe { element.CurrentControlType()? };
+                        if control_type != UIA_PaneControlTypeId {
+                            log(format!("accessibility tree appeared after {:?}", start.elapsed()));
+                            break;
+                        }
                     }
                 }
             }
@@ -574,6 +576,14 @@ fn visible_rect(pt: POINT, r: RECT) -> Option<RECT> {
         return None;
     }
     Some(clip)
+}
+
+/// The top-level window under `pt` if it is a Chromium/Electron window.
+fn chromium_root(pt: POINT) -> Option<isize> {
+    let root = unsafe { GetAncestor(WindowFromPoint(pt), GA_ROOT) };
+    let mut class = [0u16; 64];
+    let len = unsafe { GetClassNameW(root, &mut class) } as usize;
+    (String::from_utf16_lossy(&class[..len]) == "Chrome_WidgetWin_1").then_some(root.0 as isize)
 }
 
 fn virtual_screen() -> RECT {
