@@ -1,0 +1,28 @@
+name: Feature request
+description: Ask for something QuickCopy does not do yet.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you want to do
+      description: The task you tried to do, and where QuickCopy fell short.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: How you would like QuickCopy to behave.
+    validations:
+      required: true
+  - type: input
+    id: where
+    attributes:
+      label: App or web page
+      description: Where you would use it, if it is about a specific app or site.
+  - type: textarea
+    id: other
+    attributes:
+      label: Other information
+      description: Workarounds you use now, other tools that do this, screenshots.
