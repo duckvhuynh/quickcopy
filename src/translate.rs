@@ -55,10 +55,10 @@ pub struct Translated {
 
 /// Translates the selected `lines` (reading order) on a background thread and
 /// posts `WM_APP_TRANSLATED` to `hwnd`. `clip` is the image's screen rect.
-pub fn spawn(hwnd: HWND, id: u64, clip: RECT, target: &'static str, lines: Vec<Line>) {
+pub fn spawn(hwnd: HWND, id: u64, clip: RECT, target: String, lines: Vec<Line>) {
     let hwnd = hwnd.0 as isize;
     std::thread::spawn(move || {
-        let result = run(clip, target, lines);
+        let result = run(clip, &target, lines);
         let ptr = Box::into_raw(Box::new(Translated { id, result }));
         unsafe {
             if PostMessageW(Some(HWND(hwnd as *mut c_void)), WM_APP_TRANSLATED, WPARAM(0), LPARAM(ptr as isize)).is_err() {
@@ -106,6 +106,9 @@ pub fn group(lines: &[Slice]) -> Vec<std::ops::Range<usize>> {
     sorted.sort_unstable();
     let usual = sorted.get(sorted.len() / 2).copied().unwrap_or(0) as f32;
 
+    // Right edge that wrapped lines reach.
+    let block_right = lines.iter().map(|l| l.rect.right).max().unwrap_or(0);
+
     let mut out = Vec::new();
     let mut start = 0;
     for i in 1..lines.len() {
@@ -113,6 +116,18 @@ pub fn group(lines: &[Slice]) -> Vec<std::ops::Range<usize>> {
         let h = (prev.rect.bottom - prev.rect.top).min(next.rect.bottom - next.rect.top).max(1) as f32;
         let gap = gaps[i - 1] as f32;
         let sentence_end = prev.original.trim_end().ends_with(['.', '!', '?', ':', ';', '…', '>']);
+        // A line that stops although the next line's first word would have
+        // fit after it was broken on purpose (a heading without a period, a
+        // list item), not wrapped. Only when the next line starts a new
+        // phrase (capital letter or digit), so a sentence is never cut.
+        let next_text = next.original.trim();
+        let first_word = next_text.split_whitespace().next().unwrap_or("");
+        let chars = next_text.chars().count().max(1) as f32;
+        let first_w = (next.rect.right - next.rect.left) as f32 * first_word.chars().count() as f32 / chars;
+        let room = (block_right - prev.rect.right) as f32;
+        let starts_new = next_text.chars().next().is_some_and(|c| c.is_uppercase() || c.is_ascii_digit());
+        let continues = prev.original.trim_end().ends_with([',', '-', '–']);
+        let deliberate_break = starts_new && !continues && room > first_w + 0.5 * h;
         let wide_gap = gap > 2.2 * h || (gap > 0.5 * h && gap > 1.5 * usual + 1.0);
         let color_change = distance(prev.foreground, next.foreground) > 90;
         let style_change = match (prev.ink, next.ink) {
@@ -123,7 +138,7 @@ pub fn group(lines: &[Slice]) -> Vec<std::ops::Range<usize>> {
             }
             _ => false,
         };
-        if sentence_end || wide_gap || color_change || style_change {
+        if sentence_end || deliberate_break || wide_gap || color_change || style_change {
             out.push(start..i);
             start = i;
         }
@@ -136,8 +151,8 @@ pub fn group(lines: &[Slice]) -> Vec<std::ops::Range<usize>> {
 
 static CACHE: Mutex<Option<HashMap<(String, String), String>>> = Mutex::new(None);
 
-/// Translates `text` to `target`, or to English when it already is in
-/// `target` (so Vietnamese text still gets a useful translation).
+/// Translates `text` to `target` (see the fallback below when it already
+/// is in `target`).
 pub fn translate(text: &str, target: &str) -> std::result::Result<String, String> {
     let key = (text.to_string(), target.to_string());
     if let Some(hit) = CACHE.lock().unwrap().as_ref().and_then(|c| c.get(&key)) {
@@ -147,8 +162,10 @@ pub fn translate(text: &str, target: &str) -> std::result::Result<String, String
     let mut translated = String::new();
     for chunk in chunks(text, MAX_CHARS) {
         let (mut part, source) = request(chunk, target)?;
-        if source == target && target != "en" {
-            part = request(chunk, "en")?.0;
+        // Text already in the target language: translate it into English,
+        // or into Vietnamese when English was the target.
+        if source == target {
+            part = request(chunk, if target == "en" { "vi" } else { "en" })?.0;
         }
         if !translated.is_empty() {
             translated.push(' ');
@@ -357,6 +374,24 @@ mod tests {
             line(118, "Telegram cần gửi cho bạn SMS chứa mã", gray, 7.0, 1.1),
         ];
         assert_eq!(group(&lines), vec![0..1, 1..4, 4..5, 5..6]);
+    }
+
+    #[test]
+    fn splits_a_short_heading_line_but_not_a_wrapped_sentence() {
+        let black = [0, 0, 0];
+        let mut heading = line(0, "Hướng dẫn sử dụng nhanh", black, 10.0, 1.6);
+        heading.rect.right = 180;
+        let mut wrapped = line(21, "you can restore any earlier version. Finally, the", black, 10.0, 1.6);
+        wrapped.rect.right = 250;
+        let lines = [
+            heading,
+            line(21, "Bước một: mở ứng dụng và đăng nhập bằng tài khoản.", black, 10.0, 1.6),
+            wrapped,
+            line(42, "settings page has been reorganized for you", black, 10.0, 1.6),
+        ];
+        // Heading: next line starts with a capital and its first word fits
+        // after it. "Finally, the" / "settings": lowercase, same sentence.
+        assert_eq!(group(&lines), vec![0..1, 1..2, 2..4]);
     }
 
     #[test]

@@ -9,12 +9,17 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod i18n;
+mod languages;
 mod layout;
 mod paint;
 mod popover;
 mod rectfind;
+mod settings_ui;
+mod settings;
 mod style;
 mod textmodel;
+mod theme;
 mod translate;
 mod viet;
 mod worker;
@@ -59,13 +64,11 @@ const REVALIDATE: Duration = Duration::from_millis(300);
 const FLASH_MS: u32 = 250;
 const MENU_PAUSE: usize = 100;
 const MENU_QUIT: usize = 101;
-const MENU_VIETNAMESE: usize = 102;
+const MENU_SETTINGS: usize = 102;
 const MENU_COPY: usize = 200;
 const MENU_SELECT_ALL: usize = 201;
 const MENU_TRANSLATE: usize = 202;
 const MENU_ORIGINAL: usize = 203;
-/// Language translations are made into (English when the text already is).
-const TARGET_LANGUAGE: &str = "vi";
 
 /// A translation painted over the image, like Google Lens.
 struct Shown {
@@ -131,7 +134,9 @@ fn main() -> Result<()> {
 
     // Vietnamese reading is on whenever the model is installed
     // (QC_ENGLISH=1 forces Windows OCR, for comparing in --probe).
-    let vietnamese = viet::model_path().is_some() && std::env::var_os("QC_ENGLISH").is_none();
+    let prefs = settings::get();
+    i18n::set(prefs.ui_language);
+    let vietnamese = prefs.vietnamese_ocr && viet::model_path().is_some() && std::env::var_os("QC_ENGLISH").is_none();
     worker::VIETNAMESE.store(vietnamese, Ordering::Relaxed);
 
     let args: Vec<String> = std::env::args().collect();
@@ -271,6 +276,9 @@ fn main() -> Result<()> {
             WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
         );
         log("running; hover an image, then select its text".into());
+        if args.iter().any(|a| a == "--settings") {
+            settings_ui::open(main);
+        }
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -313,6 +321,17 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                     app.still_since = Instant::now();
                     app.requested = false;
                 }
+            });
+            LRESULT(0)
+        }
+        settings_ui::WM_APP_SETTINGS_CHANGED => {
+            // Apply what the settings window changed.
+            refresh_tray_icon(hwnd);
+            let vietnamese = settings::get().vietnamese_ocr && viet::model_path().is_some();
+            worker::VIETNAMESE.store(vietnamese, Ordering::Relaxed);
+            with_app(|app| {
+                hide(app);
+                let _ = app.tx.send(Request::Forget);
             });
             LRESULT(0)
         }
@@ -643,7 +662,23 @@ fn offer_actions(app: &mut App) {
     unsafe {
         let _ = GetCursorPos(&mut at);
     }
-    app.popover.show(at, popover::items(app.translation.is_some()));
+    // Keep clear of what the user is reading: the translation if shown,
+    // otherwise the selection (overlay coordinates -> screen).
+    let (Some(data), Some(model)) = (&app.data, &app.model) else { return };
+    let origin = (data.rect.left, data.rect.top);
+    let boxes: Vec<RECT> = match &app.translation {
+        Some(shown) => shown.boxes.iter().map(|b| b.fill).collect(),
+        None => model.highlight(app.anchor, app.focus).into_iter().map(|r| inflate(r, 1, 2)).collect(),
+    };
+    let avoid: Vec<RECT> = boxes
+        .into_iter()
+        .map(|r| RECT { left: r.left + origin.0, top: r.top + origin.1, right: r.right + origin.0, bottom: r.bottom + origin.1 })
+        .collect();
+    log(format!("popover avoids {} box(es), bounds {:?}", avoid.len(), avoid.iter().fold(None::<(i32, i32, i32, i32)>, |a, r| Some(match a {
+        None => (r.left, r.top, r.right, r.bottom),
+        Some((l, t, rr, b)) => (l.min(r.left), t.min(r.top), rr.max(r.right), b.max(r.bottom)),
+    }))));
+    app.popover.show(at, popover::items(app.translation.is_some()), &avoid);
 }
 
 fn run_command(app: &mut App, command: popover::Command) {
@@ -739,6 +774,10 @@ fn on_key(app: &mut App, vk: u16) -> bool {
     let Some(model) = &app.model else { return false };
     let vk = VIRTUAL_KEY(vk);
     let (shift, ctrl) = (key_down(VK_SHIFT), key_down(VK_CONTROL));
+    if settings::get().translate_shortcut.matches(vk.0, ctrl, shift, key_down(VK_MENU)) {
+        run_command(app, popover::Command::Translate);
+        return true;
+    }
     let n = model.len();
     let (lo, hi) = (app.anchor.min(app.focus), app.anchor.max(app.focus));
     let collapsed = lo == hi;
@@ -775,10 +814,6 @@ fn on_key(app: &mut App, vk: u16) -> bool {
         }
         VK_C | VK_INSERT if ctrl => {
             run_command(app, popover::Command::Copy);
-            true
-        }
-        VK_T if ctrl => {
-            run_command(app, popover::Command::Translate);
             true
         }
         // Esc closes the menu first, then puts the original back, then dismisses.
@@ -858,13 +893,19 @@ unsafe fn selection_menu(overlay: HWND) {
     .unwrap_or(false);
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
+        let t = i18n::t();
+        let item = |id: usize, label: String| {
+            let _ = AppendMenuW(menu, MF_STRING, id, &HSTRING::from(label));
+        };
         if translated {
-            let _ = AppendMenuW(menu, MF_STRING, MENU_COPY, w!("Sao chép bản dịch\tCtrl+C"));
-            let _ = AppendMenuW(menu, MF_STRING, MENU_ORIGINAL, w!("Hiện bản gốc\tEsc"));
+            item(MENU_COPY, format!("{}\tCtrl+C", t.copy_translation));
+            item(MENU_ORIGINAL, format!("{}\tEsc", t.show_original));
         } else {
-            let _ = AppendMenuW(menu, MF_STRING, MENU_COPY, w!("Sao chép\tCtrl+C"));
-            let _ = AppendMenuW(menu, MF_STRING, MENU_TRANSLATE, w!("Dịch sang Tiếng Việt\tCtrl+T"));
-            let _ = AppendMenuW(menu, MF_STRING, MENU_SELECT_ALL, w!("Chọn tất cả\tCtrl+A"));
+            let prefs = settings::get();
+            let target = t.translate_to.replace("{}", i18n::language_name(&prefs.target_language));
+            item(MENU_COPY, format!("{}\tCtrl+C", t.copy));
+            item(MENU_TRANSLATE, format!("{target}\t{}", prefs.translate_shortcut.label()));
+            item(MENU_SELECT_ALL, format!("{}\tCtrl+A", t.select_all));
         }
         let mut pt = POINT::default();
         let _ = GetCursorPos(&mut pt);
@@ -911,7 +952,7 @@ fn start_translation(app: &mut App) {
     log(format!("translating {} line(s)", lines.len()));
     app.translating = true;
     render(app);
-    translate::spawn(app.main, data.id, data.rect, TARGET_LANGUAGE, lines);
+    translate::spawn(app.main, data.id, data.rect, settings::get().target_language, lines);
 }
 
 /// A translation came back: draw it in the original's size and weight, on
@@ -933,10 +974,15 @@ fn apply_translation(app: &mut App, translated: Translated) {
         v.sort_by(f32::total_cmp);
         v.get(v.len() / 2).copied()
     };
-    let mut boxes = Vec::new();
-    let mut text = Vec::new();
+    // Pass 1: each unit's look (matched size and weight) and its fit.
+    struct Plan {
+        size: f32,
+        weight: i32,
+        widths: Vec<f32>,
+        fit: layout::Fit,
+    }
+    let mut plans = Vec::new();
     for unit in &units {
-        text.push(unit.translation.clone());
         let inks: Vec<style::Ink> = unit.slices.iter().filter_map(|s| s.ink).collect();
         let line_h = median(unit.slices.iter().map(|s| (s.rect.bottom - s.rect.top) as f32).collect()).unwrap_or(16.0);
         // The original's look, from the median of its lines.
@@ -961,17 +1007,46 @@ fn apply_translation(app: &mut App, translated: Translated) {
             .map(|(i, s)| if i == last { image_w as f32 - 4.0 } else { right } - s.rect.left as f32)
             .collect();
         let fit = layout::fit(&unit.translation, &widths, size, &mut |t, s| paint::measure(t, s, weight));
+        plans.push(Plan { size, weight, widths, fit });
+    }
 
+    // Pass 2: text that looked the same in the original looks the same
+    // translated. Units of one style share the smallest size any of them
+    // had to shrink to; otherwise a paragraph that ran long would sit in a
+    // smaller font than the sentence above it.
+    let shared: Vec<f32> = plans
+        .iter()
+        .map(|p| {
+            plans
+                .iter()
+                .filter(|q| q.weight == p.weight && (q.size / p.size - 1.0).abs() < 0.1)
+                .map(|q| q.fit.size)
+                .fold(p.fit.size, f32::min)
+        })
+        .collect();
+    for ((plan, unit), size) in plans.iter_mut().zip(&units).zip(shared) {
+        if size < plan.fit.size {
+            let weight = plan.weight;
+            plan.fit = layout::fit(&unit.translation, &plan.widths, size, &mut |t, s| paint::measure(t, s, weight));
+        }
+    }
+
+    // Pass 3: boxes, on the original baselines.
+    let mut boxes = Vec::new();
+    let mut text = Vec::new();
+    for (unit, plan) in units.iter().zip(plans) {
+        text.push(unit.translation.clone());
+        let weight = plan.weight;
         // Baseline of lines the measurement missed: same offset from the box
         // top as the measured lines.
         let offset = median(unit.slices.iter().filter_map(|s| s.ink.map(|i| i.baseline - s.rect.top as f32)).collect());
-        for (slice, line) in unit.slices.iter().zip(fit.lines) {
+        for (slice, line) in unit.slices.iter().zip(plan.fit.lines) {
             let h = slice.rect.bottom - slice.rect.top;
             // Cover the original glyphs, tone marks included.
             let mut fill = translate::inflate(slice.rect, 2, 0);
             fill.top -= (h * 2 / 5).max(2);
             fill.bottom += (h / 3).max(2);
-            let needed = paint::measure(&line, fit.size, weight).ceil() as i32 + 6;
+            let needed = paint::measure(&line, plan.fit.size, weight).ceil() as i32 + 6;
             fill.right = fill.right.max(fill.left + needed);
             let baseline = slice.ink.map(|i| i.baseline).or(offset.map(|o| slice.rect.top as f32 + o));
             boxes.push(paint::DrawBox {
@@ -979,7 +1054,7 @@ fn apply_translation(app: &mut App, translated: Translated) {
                 background: slice.background,
                 foreground: slice.foreground,
                 text: line,
-                size: fit.size,
+                size: plan.fit.size,
                 weight,
                 baseline,
             });
@@ -1226,7 +1301,7 @@ fn tray_data(main: HWND) -> NOTIFYICONDATAW {
         hIcon: unsafe { LoadIconW(None, IDI_APPLICATION) }.unwrap_or_default(),
         ..Default::default()
     };
-    let tip: Vec<u16> = "QuickCopy - copy text from images".encode_utf16().collect();
+    let tip: Vec<u16> = i18n::t().tooltip.encode_utf16().take(nid.szTip.len() - 1).collect();
     nid.szTip[..tip.len()].copy_from_slice(&tip);
     nid
 }
@@ -1234,6 +1309,13 @@ fn tray_data(main: HWND) -> NOTIFYICONDATAW {
 fn add_tray_icon(main: HWND) {
     unsafe {
         let _ = Shell_NotifyIconW(NIM_ADD, &tray_data(main));
+    }
+}
+
+/// Shows the tooltip in the current app language.
+pub fn refresh_tray_icon(main: HWND) {
+    unsafe {
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &tray_data(main));
     }
 }
 
@@ -1248,16 +1330,12 @@ unsafe fn tray_menu(main: HWND) {
     let paused = with_app(|app| app.paused).unwrap_or(false);
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
+        let t = i18n::t();
         let pause_flags = if paused { MF_STRING | MF_CHECKED } else { MF_STRING };
-        let _ = AppendMenuW(menu, pause_flags, MENU_PAUSE, w!("Pause"));
-        let has_model = viet::model_path().is_some();
-        let mut vi_flags = if worker::VIETNAMESE.load(Ordering::Relaxed) { MF_STRING | MF_CHECKED } else { MF_STRING };
-        if !has_model {
-            vi_flags |= MF_GRAYED;
-        }
-        let _ = AppendMenuW(menu, vi_flags, MENU_VIETNAMESE, w!("Tiếng Việt (VieSVTR)"));
+        let _ = AppendMenuW(menu, MF_STRING, MENU_SETTINGS, &HSTRING::from(t.settings));
+        let _ = AppendMenuW(menu, pause_flags, MENU_PAUSE, &HSTRING::from(t.pause));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("Quit QuickCopy"));
+        let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, &HSTRING::from(t.quit));
         let mut pt = POINT::default();
         let _ = GetCursorPos(&mut pt);
         let _ = SetForegroundWindow(main);
@@ -1272,10 +1350,7 @@ unsafe fn tray_menu(main: HWND) {
                     }
                 });
             }
-            MENU_VIETNAMESE => {
-                worker::VIETNAMESE.fetch_xor(true, Ordering::Relaxed);
-                with_app(hide);
-            }
+            MENU_SETTINGS => settings_ui::open(main),
             MENU_QUIT => PostQuitMessage(0),
             _ => {}
         }

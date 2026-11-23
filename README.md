@@ -11,7 +11,14 @@ Shift+arrows, Ctrl+Shift+arrows by word, Shift+Home/End, Ctrl+A. The
 selection stays until you click elsewhere or press Esc; other keys go back
 to the app underneath.
 
-**Translate** (Ctrl+T or right-click > Dịch sang Tiếng Việt): the selected
+**Settings** (tray icon > Settings, or `quickcopy --settings`): start with
+Windows, the language translations go into (all of Google Translate's
+languages, searchable), the translate shortcut, the app language (English or
+Vietnamese) and Vietnamese text recognition. Saved in
+`%APPDATA%\QuickCopy\settings.json`. Regenerate the language list with
+`python tools/languages.py`.
+
+**Translate** (the shortcut, default Ctrl+T, or the selection menu): the selected
 text is translated with Google Translate and painted over the original in
 the same boxes, with sampled background and text colors, like Google Lens.
 Text already in Vietnamese is translated to English. Ctrl+C copies the
