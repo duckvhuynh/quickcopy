@@ -377,12 +377,16 @@ impl TextModel {
 /// Lines close together (gap up to 1.5 line heights, overlapping sideways)
 /// form one paragraph; a far-off caption keeps its own smaller area, so the
 /// rest of the image still gets the app's own clicks and drags.
-pub fn grab_areas(lines: &[RECT]) -> Vec<RECT> {
+///
+/// On a paused video (`video`) the margin is one line height sideways and a
+/// third above and below: players put their controls right next to the
+/// picture's text (the seek bar under a subtitle), and they keep their clicks.
+pub fn grab_areas(lines: &[RECT], video: bool) -> Vec<RECT> {
     paragraphs(lines)
         .into_iter()
         .map(|p| {
             let (b, h) = (p.rect, p.line_height);
-            let (dx, dy) = ((3 * h).max(32), (3 * h / 2).max(16));
+            let (dx, dy) = if video { (h, h / 3) } else { ((3 * h).max(32), (3 * h / 2).max(16)) };
             RECT { left: b.left - dx, top: b.top - dy, right: b.right + dx, bottom: b.bottom + dy }
         })
         .collect()
@@ -438,14 +442,14 @@ mod tests {
     fn paragraph_lines_share_one_wide_area() {
         // Three 20 px lines, 16 px apart: one paragraph.
         let lines = [rect(100, 100, 500, 120), rect(100, 136, 480, 156), rect(100, 172, 300, 192)];
-        let areas = grab_areas(&lines);
+        let areas = grab_areas(&lines, false);
         assert_eq!(areas, vec![rect(40, 70, 560, 222)]);
     }
 
     #[test]
     fn distant_caption_keeps_its_own_area() {
         let lines = [rect(100, 100, 500, 120), rect(100, 136, 480, 156), rect(600, 700, 700, 716)];
-        let areas = grab_areas(&lines);
+        let areas = grab_areas(&lines, false);
         assert_eq!(areas.len(), 2);
         // 16 px line: 48 px sideways, 24 px above and below.
         assert_eq!(areas[1], rect(552, 676, 748, 740));

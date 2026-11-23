@@ -3,3 +3,4 @@
 # Downloaded model weights (VieSVTR, CC BY-NC 4.0); fetch separately
 /models/**/*.onnx
 /assets/preview/
+/tools/video/out/

@@ -1,0 +1,11 @@
+<!doctype html><html><head><title>video.html</title></head><body style="margin:0;background:#111">
+<video id="v" src="talk.mp4" controls loop style="display:block;width:960px;height:540px"></video>
+<script>
+const v = document.getElementById('v');
+const q = new URLSearchParams(location.search);
+if (q.get('src')) v.src = q.get('src');
+if (q.get('muted')) v.muted = true;
+if (q.get('play')) v.play().catch(e => document.title = 'play blocked');
+if (q.get('pauseAfter')) setTimeout(() => v.pause(), +q.get('pauseAfter'));
+v.addEventListener('pause', () => console.log('PAUSED at ' + Date.now()));
+</script></body></html>

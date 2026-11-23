@@ -5,6 +5,16 @@ text inside it like normal text, then copy it with Ctrl+C or the right-click
 menu. Works in browsers and in Electron apps such as Zalo. Reads English and
 Vietnamese.
 
+**Videos** in web pages (Edge, Chrome): a paused video's frame is read like
+an image; a playing one is left alone. The video counts as playing while
+its picture changes, or while its tab plays sound (Windows media sessions,
+matched by the tab's title), so a still picture with music is not read
+either. Pausing it (a click, the space key, a media key) brings up the
+overlay without moving the mouse: a playing video under the resting cursor
+is checked twice a second, which costs about 1-2% of one core. Text the
+player draws over the picture (controls, time, title, captions) is left
+out, so the overlay never takes the player's clicks.
+
 Selection works like native text: drag (it may start a little before or
 after a line), double-click a word, triple-click a line, Shift+click,
 Shift+arrows, Ctrl+Shift+arrows by word, Shift+Home/End, Ctrl+A. The
@@ -90,6 +100,7 @@ put an `onnxruntime.dll` (1.17 or newer) next to the executable.
 quickcopy --ocr-file image.png   # OCR an image file, print text and word boxes
 quickcopy --probe X Y            # detect and OCR the image at a screen point
 quickcopy --layout image.png     # lines in reading order, with their blocks
+quickcopy --uia X Y              # what UI Automation and IAccessible2 report at a point
 quickcopy --drag image.png X0 Y0 X1 Y1   # what a drag between two points selects
 ```
 
@@ -124,3 +135,11 @@ and memory on this machine.
 - A single click on a word inside the image is taken by the overlay, so image
   links do not open when clicked exactly on their text.
 - Content behind DRM or windows running as administrator cannot be read.
+- Videos are recognised in Chromium browsers (tested in Edge, with HTML5
+  video and YouTube). A muted video whose picture does not move counts as
+  paused. Video players in desktop apps (Media Player, VLC) are not handled.
+- Over a paused video, picture text on the same row as one of the player's
+  controls or captions is left out with them.
+- A video with a still picture that has only just started playing (under a
+  second) can count as paused until Windows lists its media session; the
+  overlay, still invisible, goes away at the next check (0.3 s).

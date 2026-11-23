@@ -27,6 +27,7 @@ mod style;
 mod textmodel;
 mod theme;
 mod translate;
+mod video;
 mod viet;
 mod worker;
 
@@ -52,7 +53,7 @@ use windows::core::*;
 
 use textmodel::TextModel;
 use translate::{Translated, WM_APP_TRANSLATED};
-use worker::{OcrData, Request, WM_APP_HIDE, WM_APP_SHOW, WM_APP_UPDATE, Word, log};
+use worker::{OcrData, Request, WM_APP_HIDE, WM_APP_PLAYING, WM_APP_SHOW, WM_APP_UPDATE, Word, log};
 
 const WM_APP_TRAY: u32 = WM_APP + 10;
 const TICK_TIMER: usize = 1;
@@ -65,6 +66,9 @@ const DWELL: Duration = Duration::from_millis(150);
 /// Extra detection attempts while the cursor rests and nothing was found.
 const DETECT_RETRIES: u8 = 2;
 const DETECT_RETRY: Duration = Duration::from_millis(800);
+/// How often a playing video under the resting cursor is checked again, so
+/// pausing it (a click, the space key) brings up the overlay.
+const VIDEO_RECHECK: Duration = Duration::from_millis(500);
 /// How often we check that the covered image has not moved or changed.
 const REVALIDATE: Duration = Duration::from_millis(300);
 /// Brief green flash confirming a copy.
@@ -94,6 +98,9 @@ struct App {
     requested: bool,
     requested_at: Instant,
     retries: u8,
+    /// A playing video under the cursor (screen rect): checked again every
+    /// `VIDEO_RECHECK` until it pauses or the cursor leaves it.
+    playing: Option<RECT>,
     data: Option<OcrData>,
     model: Option<TextModel>,
     last_revalidate: Instant,
@@ -203,9 +210,12 @@ fn main() -> Result<()> {
     if args.len() >= 7 && args[1] == "--drag" {
         return drag_file(&args[2], &args[3..]);
     }
-    if args.len() == 4 && args[1] == "--probe" {
+    if args.len() == 4 && (args[1] == "--probe" || args[1] == "--uia") {
         let x = args[2].parse().expect("X must be an integer");
         let y = args[3].parse().expect("Y must be an integer");
+        if args[1] == "--uia" {
+            return worker::print_uia(POINT { x, y });
+        }
         return worker::probe(POINT { x, y });
     }
     if !only_instance() {
@@ -308,6 +318,7 @@ fn main() -> Result<()> {
                 requested: false,
                 requested_at: Instant::now(),
                 retries: 0,
+                playing: None,
                 data: None,
                 model: None,
                 last_revalidate: Instant::now(),
@@ -376,6 +387,11 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         WM_APP_TRANSLATED => {
             let translated = unsafe { *Box::from_raw(lp.0 as *mut Translated) };
             with_app(|app| apply_translation(app, translated));
+            LRESULT(0)
+        }
+        WM_APP_PLAYING => {
+            let rect = unsafe { *Box::from_raw(lp.0 as *mut RECT) };
+            with_app(|app| app.playing = Some(rect));
             LRESULT(0)
         }
         WM_APP_HIDE => {
@@ -461,6 +477,9 @@ fn tick(app: &mut App) {
         }
     }
 
+    if app.playing.is_some_and(|r| !contains(r, pos)) {
+        app.playing = None;
+    }
     if pos != app.last_pos {
         app.last_pos = pos;
         app.still_since = now;
@@ -476,7 +495,8 @@ fn tick(app: &mut App) {
     // stays put: a page or viewer may still be loading, and a fresh Chrome
     // window answers the first accessibility query before its tree exists.
     let retry_due = app.requested && app.retries < DETECT_RETRIES && now - app.requested_at >= DETECT_RETRY;
-    if !app.requested || retry_due {
+    let video_due = app.playing.is_some() && now - app.requested_at >= VIDEO_RECHECK;
+    if !app.requested || retry_due || video_due {
         if app.requested {
             app.retries += 1;
         }
@@ -501,6 +521,7 @@ fn show(app: &mut App, data: OcrData) {
     log(format!("overlay {}x{} at ({}, {}), {} words", r.right - r.left, r.bottom - r.top, r.left, r.top, data.words.len()));
     app.model = Some(TextModel::new(&data.words, &data.lines));
     app.data = Some(data);
+    app.playing = None;
     app.anchor = 0;
     app.focus = 0;
     app.dragging = false;
@@ -1219,7 +1240,7 @@ fn render(app: &App) {
         px.fill(0);
 
         let hit = pixel(0, 0, 0, 1);
-        for area in textmodel::grab_areas(&data.lines) {
+        for area in textmodel::grab_areas(&data.lines, data.video) {
             fill(px, w, h, area, hit);
         }
         if let (Some(model), true, None) = (&app.model, app.has_selection(), &app.translation) {

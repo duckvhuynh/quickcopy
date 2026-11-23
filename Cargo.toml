@@ -15,6 +15,7 @@ windows ={ version = "0.62", features = [
     "Foundation_Collections",
     "Globalization",
     "Graphics_Imaging",
+    "Media_Control",
     "Media_Ocr",
     "Storage",
     "Storage_Streams",
@@ -35,6 +36,7 @@ windows ={ version = "0.62", features = [
     "Win32_System_ProcessStatus",
     "Win32_System_Registry",
     "Win32_System_Threading",
+    "Win32_System_Variant",
     "Win32_UI_Accessibility",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
@@ -42,6 +44,8 @@ windows ={ version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 windows-numerics = "0.3.1"
+# Already part of `windows`; named for its `interface` macro (IAccessible2).
+windows-core = "0.62"
 
 [build-dependencies]
 embed-resource = "3"

@@ -18,6 +18,7 @@ use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Com::*;
 use windows::Win32::UI::Accessibility::*;
+use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 
@@ -26,6 +27,11 @@ use crate::viet;
 pub const WM_APP_SHOW: u32 = WM_APP + 1; // lparam = Box<OcrData>
 pub const WM_APP_HIDE: u32 = WM_APP + 2;
 pub const WM_APP_UPDATE: u32 = WM_APP + 3; // lparam = Box<OcrData>
+/// A video under the cursor is playing (lparam = Box<RECT>, its screen rect).
+pub const WM_APP_PLAYING: u32 = WM_APP + 5;
+/// Two captures this far apart tell a playing video from a paused one (a
+/// frame lasts 17-42 ms at 24-60 fps).
+const VIDEO_FRAME: Duration = Duration::from_millis(150);
 /// How long an image may keep changing (opening animation) before we give up.
 const SETTLE_TIMEOUT: Duration = Duration::from_millis(1200);
 const SETTLE_STEP: Duration = Duration::from_millis(40);
@@ -63,11 +69,13 @@ pub struct OcrData {
     pub id: u64,
     /// Words are Windows OCR's; the Vietnamese reading is still coming.
     pub pending: bool,
+    /// A paused video's frame, not an image (see `textmodel::grab_areas`).
+    pub video: bool,
 }
 
 impl OcrData {
-    fn new(rect: RECT, words: Vec<Word>, id: u64, pending: bool) -> Self {
-        Self { rect, lines: line_rects(&words), words, id, pending }
+    fn new(rect: RECT, words: Vec<Word>, id: u64, pending: bool, video: bool) -> Self {
+        Self { rect, lines: line_rects(&words), words, id, pending, video }
     }
 }
 
@@ -93,6 +101,20 @@ struct Current {
     clip: RECT,
     /// Coarse look of the image when it was read (see `grid`).
     grid: Vec<[u8; 3]>,
+    /// For a paused video: the window it plays in, to notice it playing
+    /// again when its picture does not move (`video::Sessions`).
+    video_window: Option<HWND>,
+}
+
+/// What `detect` found under a point.
+enum Found {
+    /// No image, or one without text.
+    Nothing,
+    /// An image or a paused video's frame, read and reported; kept to
+    /// notice it moving or changing.
+    Image(Current),
+    /// A video that is playing (its screen rect): read once it pauses.
+    PlayingVideo(RECT),
 }
 
 /// The Vietnamese model being loaded on another thread.
@@ -110,6 +132,7 @@ pub struct Detector {
     viet_failed: bool,
     /// Chromium top-level windows already given time to build a tree (see detect).
     waited: std::collections::HashSet<isize>,
+    sessions: crate::video::Sessions,
 }
 
 /// Read text with the Vietnamese model (set from the tray menu).
@@ -131,6 +154,7 @@ impl Detector {
             viet: None,
             viet_failed: false,
             waited: Default::default(),
+            sessions: Default::default(),
         })
     }
 
@@ -142,15 +166,16 @@ impl Detector {
             .unwrap_or_default()
     }
 
-    /// Finds the image under `pt` and OCRs it. `report` gets the result as
-    /// soon as Windows OCR has the words (`Stage::Show`, marked pending when
-    /// Vietnamese is still being read), then the final words (`Stage::Update`).
-    /// `from_cursor` is false for prefetching, where the cursor is elsewhere.
-    fn detect(&mut self, pt: POINT, from_cursor: bool, report: &mut dyn FnMut(Stage, OcrData)) -> Result<Option<Current>> {
+    /// Finds the image (or paused video) under `pt` and OCRs it. `report`
+    /// gets the result as soon as Windows OCR has the words (`Stage::Show`,
+    /// marked pending when Vietnamese is still being read), then the final
+    /// words (`Stage::Update`). `from_cursor` is false for prefetching, where
+    /// the cursor is elsewhere.
+    fn detect(&mut self, pt: POINT, from_cursor: bool, report: &mut dyn FnMut(Stage, OcrData)) -> Result<Found> {
         let t0 = Instant::now();
         let mut element = unsafe { self.uia.ElementFromPoint(pt)? };
         if unsafe { element.CurrentProcessId()? } == self.own_pid {
-            return Ok(None);
+            return Ok(Found::Nothing);
         }
         let mut control_type = unsafe { element.CurrentControlType()? };
         // Chrome/Edge build their accessibility tree only after the first
@@ -174,20 +199,30 @@ impl Detector {
                 }
             }
         }
-        let (clip, tracked) = if control_type == UIA_ImageControlTypeId {
+        // A <video> is a group like any <div>; the tag says which.
+        let video = if control_type == UIA_GroupControlTypeId { crate::video::video_at(pt) } else { None };
+        let is_video = video.is_some();
+        let (clip, tracked) = if control_type == UIA_ImageControlTypeId || is_video {
             let element_rect = unsafe { element.CurrentBoundingRectangle()? };
-            let Some(clip) = visible_rect(pt, element_rect) else {
-                return Ok(None);
+            // The element UI Automation found may be a box around the video:
+            // the video's own rect is what gets read; the element is kept to
+            // notice the video moving only when it is the video.
+            let (element_rect, tracked) = match video {
+                Some(rect) if rect != element_rect => (rect, None),
+                _ => (element_rect, Some(element.clone())),
             };
-            (clip, Some((element, element_rect)))
+            let Some(clip) = visible_rect(pt, element_rect) else {
+                return Ok(Found::Nothing);
+            };
+            (clip, tracked.map(|e| (e, element_rect)))
         } else if control_type == UIA_PaneControlTypeId && self.is_chromium_without_tree(pt, &element) {
             // Electron app with accessibility turned off (e.g. Zalo): find the image from pixels.
             if from_cursor && !self.ignore_cursor && cursor_is_ibeam() {
                 log("pixel mode: cursor is over real text".into());
-                return Ok(None);
+                return Ok(Found::Nothing);
             }
             let Some(clip) = image_from_pixels(pt)? else {
-                return Ok(None);
+                return Ok(Found::Nothing);
             };
             (clip, None)
         } else {
@@ -195,13 +230,20 @@ impl Detector {
                 let class = unsafe { element.CurrentClassName() }.map(|s| s.to_string()).unwrap_or_default();
                 log(format!("not an image: control type {} class {class:?}", control_type.0));
             }
-            return Ok(None);
+            return Ok(Found::Nothing);
         };
 
         let (w, h) = (clip.right - clip.left, clip.bottom - clip.top);
         // The same pixels read differently in Vietnamese mode.
         let mode = if VIETNAMESE.load(Ordering::Relaxed) { 0x9E37_79B9_7F4A_7C15 } else { 0 };
         let mut pixels = capture(clip, w, h)?;
+        let video_window = is_video.then(|| unsafe { GetAncestor(WindowFromPoint(pt), GA_ROOT) });
+        if let Some(window) = video_window {
+            match self.paused_frame(clip, window, &pixels)? {
+                Some(frame) => pixels = frame,
+                None => return Ok(Found::PlayingVideo(clip)),
+            }
+        }
         let mut hash = hash_pixels(&pixels, w, h);
         if !self.cache.contains_key(&(hash ^ mode)) {
             // Not seen before. An image still animating in (viewer zoom, fade)
@@ -209,26 +251,30 @@ impl Detector {
             // Cache hits skip this: they matched an image that had settled.
             let Some(settled) = stable_capture(clip, hash)? else {
                 log("image never settled".into());
-                return Ok(None);
+                return Ok(Found::Nothing);
             };
             (hash, pixels) = settled;
         }
         let key = hash ^ mode;
-        let current = Current { element: tracked, clip, grid: grid(&pixels, w, h) };
+        let current = Current { element: tracked, clip, grid: grid(&pixels, w, h), video_window };
         let t_found = t0.elapsed();
 
         if let Some(words) = self.cache.get(&key) {
             log(format!("cache hit {w}x{h} in {:?}", t0.elapsed()));
             if !words.is_empty() {
-                report(Stage::Show, OcrData::new(clip, words.clone(), key, false));
+                report(Stage::Show, OcrData::new(clip, words.clone(), key, false, is_video));
             }
-            return Ok(Some(current));
+            return Ok(Found::Image(current));
         }
 
         let loading = self.start_loading();
         let (pixels, sw, sh, scale) = self.scaled_for_ocr(clip, pixels)?;
         let t_scaled = t0.elapsed();
-        let lines = self.windows_lines(&pixels, sw, sh)?;
+        let mut lines = self.windows_lines(&pixels, sw, sh)?;
+        if is_video {
+            let rows = self.player_rows(&element, clip);
+            lines = in_picture(lines, clip, scale, &rows);
+        }
         let first = to_words(&lines, scale);
         log(format!(
             "windows ocr {w}x{h}: {} words in {:?} (found {t_found:?}, scaled {:?}, read {:?})",
@@ -240,11 +286,11 @@ impl Detector {
         if first.is_empty() {
             self.finish_loading(loading);
             self.remember(key, Vec::new());
-            return Ok(None);
+            return Ok(Found::Nothing);
         }
         // The Windows OCR words go out without waiting for the model.
         let vietnamese = VIETNAMESE.load(Ordering::Relaxed) && !self.viet_failed;
-        report(Stage::Show, OcrData::new(clip, first.clone(), key, vietnamese));
+        report(Stage::Show, OcrData::new(clip, first.clone(), key, vietnamese, is_video));
         self.finish_loading(loading);
 
         let words = if vietnamese {
@@ -255,13 +301,70 @@ impl Detector {
                 None => first,
             };
             log(format!("vietnamese ready in {:?}", t0.elapsed()));
-            report(Stage::Update, OcrData::new(clip, words.clone(), key, false));
+            report(Stage::Update, OcrData::new(clip, words.clone(), key, false, is_video));
             words
         } else {
             first
         };
         self.remember(key, words);
-        Ok(Some(current))
+        Ok(Found::Image(current))
+    }
+
+    /// The frame of a video that is paused, or `None` while it plays: its
+    /// window's media session says so, or its picture changes between two
+    /// captures. `first` is a capture of `clip` just taken.
+    fn paused_frame(&self, clip: RECT, window: HWND, first: &[u8]) -> Result<Option<Vec<u8>>> {
+        if self.sessions.playing_in(&crate::video::window_title(window)) {
+            log("video playing (media session)".into());
+            return Ok(None);
+        }
+        std::thread::sleep(VIDEO_FRAME);
+        let (w, h) = (clip.right - clip.left, clip.bottom - clip.top);
+        let second = capture(clip, w, h)?;
+        if second != first {
+            log("video playing (picture moves)".into());
+            return Ok(None);
+        }
+        Ok(Some(second))
+    }
+
+    /// The rows of the screen (top, bottom) where a video's player shows its
+    /// own controls and text over the picture: buttons, the seek bar and the
+    /// time beside them, a title, captions. They are the named elements
+    /// inside the player (the highest element around `element` that is the
+    /// video's size), except panels as tall as a third of the video.
+    fn player_rows(&self, element: &IUIAutomationElement, video: RECT) -> Vec<(i32, i32)> {
+        let close = |r: RECT| (r.left - video.left).abs() <= 2 && (r.top - video.top).abs() <= 2 && (r.right - video.right).abs() <= 2 && (r.bottom - video.bottom).abs() <= 2;
+        let rows = || -> Result<Vec<(i32, i32)>> {
+            unsafe {
+                let walker = self.uia.RawViewWalker()?;
+                let mut player = element.clone();
+                for _ in 0..10 {
+                    match walker.GetParentElement(&player) {
+                        Ok(parent) if close(parent.CurrentBoundingRectangle()?) || !close(player.CurrentBoundingRectangle()?) => player = parent,
+                        _ => break,
+                    }
+                }
+                let unnamed = self.uia.CreatePropertyCondition(UIA_NamePropertyId, &VARIANT::from(BSTR::new()))?;
+                let named = self.uia.CreateNotCondition(&unnamed)?;
+                let found = player.FindAll(TreeScope_Descendants, &named)?;
+                let mut rows = Vec::new();
+                for i in 0..found.Length()? {
+                    let e = found.GetElement(i)?;
+                    let r = e.CurrentBoundingRectangle()?;
+                    let visible = r.right > r.left && r.bottom > r.top && !e.CurrentIsOffscreen()?.as_bool();
+                    let inside = r.left < video.right && r.right > video.left && r.top < video.bottom && r.bottom > video.top;
+                    if visible && inside && (r.bottom - r.top) * 3 < video.bottom - video.top {
+                        rows.push((r.top, r.bottom));
+                    }
+                }
+                Ok(rows)
+            }
+        };
+        rows().unwrap_or_else(|e| {
+            log(format!("video: reading the player's controls failed: {e}"));
+            Vec::new()
+        })
     }
 
     fn remember(&mut self, key: u64, words: Vec<Word>) {
@@ -391,8 +494,15 @@ impl Detector {
         lines
     }
 
-    /// True if the image the overlay covers is still where it was and unchanged.
+    /// True if the image the overlay covers is still where it was and unchanged
+    /// (and, for a video, still paused).
     fn still_valid(&self, cur: &Current) -> bool {
+        if let Some(window) = cur.video_window {
+            if self.sessions.playing_in(&crate::video::window_title(window)) {
+                log("revalidate: video playing".into());
+                return false;
+            }
+        }
         if let Some((element, element_rect)) = &cur.element {
             let Ok(rect) = (unsafe { element.CurrentBoundingRectangle() }) else {
                 return false;
@@ -492,8 +602,16 @@ pub fn run(rx: Receiver<Request>, hwnd: isize) {
                 }
             };
             match detector.detect(pt, true, &mut report) {
-                Ok(Some(cur)) => current = Some(cur),
-                Ok(None) => {}
+                Ok(Found::Image(cur)) => current = Some(cur),
+                Ok(Found::PlayingVideo(rect)) => {
+                    let ptr = Box::into_raw(Box::new(rect));
+                    unsafe {
+                        if PostMessageW(Some(hwnd), WM_APP_PLAYING, WPARAM(0), LPARAM(ptr as isize)).is_err() {
+                            drop(Box::from_raw(ptr));
+                        }
+                    }
+                }
+                Ok(Found::Nothing) => {}
                 Err(e) => log(format!("detect error: {e}")),
             }
         } else if let Some(pt) = prefetch {
@@ -509,12 +627,12 @@ pub fn run(rx: Receiver<Request>, hwnd: isize) {
                     }
                 }
                 match detector.detect(pt, false, &mut |_, _| {}) {
-                    Ok(Some(cur)) => {
+                    Ok(Found::Image(cur)) => {
                         let c = cur.clip;
                         log(format!("prefetch at ({}, {}): cached, clip ({}, {}) - ({}, {})", pt.x, pt.y, c.left, c.top, c.right, c.bottom));
                         break;
                     }
-                    Ok(None) => log(format!("prefetch at ({}, {}): nothing yet", pt.x, pt.y)),
+                    Ok(_) => log(format!("prefetch at ({}, {}): nothing yet", pt.x, pt.y)),
                     Err(e) => {
                         log(format!("prefetch error: {e}"));
                         break;
@@ -534,6 +652,41 @@ pub fn run(rx: Receiver<Request>, hwnd: isize) {
     }
 }
 
+/// Prints what UI Automation and IAccessible2 report for the element at a
+/// screen point and its ancestors (a debugging aid for apps whose images or
+/// videos are not found).
+pub fn print_uia(pt: POINT) -> Result<()> {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let uia: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)?;
+        let walker = uia.RawViewWalker()?;
+        println!("IAccessible2 attributes: {:?}", crate::video::attributes_at(pt));
+        let window = GetAncestor(WindowFromPoint(pt), GA_ROOT);
+        let title = crate::video::window_title(window);
+        println!("window title {title:?}, its media playing: {}", crate::video::Sessions::default().playing_in(&title));
+        let mut element = Some(uia.ElementFromPoint(pt)?);
+        for depth in 0..6 {
+            let Some(e) = element else { break };
+            println!(
+                "{depth}: type {} '{}' aria-role '{}' aria '{}' name '{}' id '{}' class '{}' rect {:?}",
+                e.CurrentControlType()?.0,
+                e.CurrentLocalizedControlType().unwrap_or_default(),
+                e.CurrentAriaRole().unwrap_or_default(),
+                e.CurrentAriaProperties().unwrap_or_default(),
+                e.CurrentName().unwrap_or_default(),
+                e.CurrentAutomationId().unwrap_or_default(),
+                e.CurrentClassName().unwrap_or_default(),
+                e.CurrentBoundingRectangle()?,
+            );
+            if let Ok(c) = walker.GetFirstChildElement(&e) {
+                println!("   first child: type {} aria-role '{}' name '{}'", c.CurrentControlType()?.0, c.CurrentAriaRole().unwrap_or_default(), c.CurrentName().unwrap_or_default());
+            }
+            element = walker.GetParentElement(&e).ok();
+        }
+    }
+    Ok(())
+}
+
 /// One-shot detection at a screen point, printed to stdout. Used for testing.
 pub fn probe(pt: POINT) -> Result<()> {
     unsafe {
@@ -545,7 +698,7 @@ pub fn probe(pt: POINT) -> Result<()> {
     let mut last = None;
     let found = detector.detect(pt, true, &mut |_, data| last = Some(data))?;
     match (found, last) {
-        (Some(_), Some(data)) => {
+        (Found::Image(_), Some(data)) => {
             let r = data.rect;
             println!("image rect: ({}, {}) - ({}, {})", r.left, r.top, r.right, r.bottom);
             let all: Vec<usize> = (0..data.words.len()).collect();
@@ -558,6 +711,7 @@ pub fn probe(pt: POINT) -> Result<()> {
                 }
             }
         }
+        (Found::PlayingVideo(_), _) => println!("a video is playing at ({}, {})", pt.x, pt.y),
         _ => println!("no image with text at ({}, {})", pt.x, pt.y),
     }
     Ok(())
@@ -691,7 +845,7 @@ type Box4 = (f32, f32, f32, f32);
 /// Pieces further apart stay lines of their own: table cells, columns, a
 /// label and its value.
 fn join_rows(lines: Vec<Vec<(Box4, String)>>) -> Vec<Vec<(Box4, String)>> {
-    let bounds = |line: &[(Box4, String)]| line.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |a, (b, _)| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)));
+    let bounds = line_bounds;
     let mut out: Vec<Vec<(Box4, String)>> = Vec::new();
     for line in lines.into_iter().filter(|l| !l.is_empty()) {
         let b = bounds(&line);
@@ -723,6 +877,31 @@ fn join_rows(lines: Vec<Vec<(Box4, String)>>) -> Vec<Vec<(Box4, String)>> {
         }
     }
     out
+}
+
+/// The lines that are part of a video's picture. Players draw their own
+/// controls, time, title and captions over the video as page text; lines on
+/// the rows they occupy (`player_rows`) are dropped, so the overlay never
+/// takes the player's clicks and the page's own text stays the page's.
+fn in_picture(lines: Vec<Vec<(Box4, String)>>, clip: RECT, scale: f32, rows: &[(i32, i32)]) -> Vec<Vec<(Box4, String)>> {
+    let before = lines.len();
+    let kept: Vec<_> = lines
+        .into_iter()
+        .filter(|line| {
+            let (_, t, _, b) = line_bounds(line);
+            let middle = clip.top + ((t + b) / 2.0 / scale) as i32;
+            !rows.iter().any(|&(top, bottom)| (top..=bottom).contains(&middle))
+        })
+        .collect();
+    if kept.len() < before {
+        log(format!("video: {} of {before} lines are the player's own text", before - kept.len()));
+    }
+    kept
+}
+
+/// The box around a line's words.
+fn line_bounds(line: &[(Box4, String)]) -> Box4 {
+    line.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |a, (b, _)| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)))
 }
 
 /// A text line cut out of the capture for VieSVTR.
