@@ -111,6 +111,11 @@ struct App {
     dragging: bool,
     /// The overlay has keyboard focus (only while something is selected).
     active: bool,
+    /// Our right-click menu is open over the image.
+    menu_open: bool,
+    /// The worker found the image changed while a drag or our menu was
+    /// going on; the overlay goes when they end.
+    stale: bool,
     /// The window that had focus before the overlay took it.
     prev_foreground: HWND,
     /// The user asked to copy before the Vietnamese reading arrived.
@@ -327,6 +332,8 @@ fn main() -> Result<()> {
                 focus: 0,
                 dragging: false,
                 active: false,
+                menu_open: false,
+                stale: false,
                 prev_foreground: HWND::default(),
                 pending_copy: false,
                 flashing: false,
@@ -396,12 +403,13 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             LRESULT(0)
         }
         WM_APP_HIDE => {
-            // The image moved or changed under the overlay.
+            // The image moved or changed under the overlay. The worker has
+            // let it go, so a hide put off now must still happen.
             with_app(|app| {
-                if !app.dragging {
-                    hide(app);
-                    app.still_since = Instant::now();
-                    app.requested = false;
+                if app.dragging || app.menu_open {
+                    app.stale = true;
+                } else {
+                    hide_stale(app);
                 }
             });
             LRESULT(0)
@@ -453,6 +461,12 @@ unsafe extern "system" fn on_foreground(_: HWINEVENTHOOK, _: u32, hwnd: HWND, _:
     });
 }
 
+/// QC_CAPTURABLE=1: screenshots can see the overlay while it has focus.
+fn capturable() -> bool {
+    static CAPTURABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CAPTURABLE.get_or_init(|| std::env::var_os("QC_CAPTURABLE").is_some())
+}
+
 fn tick(app: &mut App) {
     let mut pos = POINT::default();
     if unsafe { GetCursorPos(&mut pos) }.is_err() {
@@ -461,10 +475,12 @@ fn tick(app: &mut App) {
     let now = Instant::now();
 
     if let Some(data) = &app.data {
-        // Not while the overlay has focus: our own menu over the image would
-        // look like the image changing, and the page cannot scroll then
-        // anyway (wheel and other keys hand focus back first).
-        if !app.dragging && !app.active && now - app.last_revalidate >= REVALIDATE {
+        // Also while something is selected: the wheel over the image but
+        // off its text lines goes straight to the page, which scrolls the
+        // image away from under the selection. Not while our own menu is
+        // open over the image (it would look like the image changing), nor
+        // when the overlay is made visible to screenshots for debugging.
+        if !app.dragging && !app.menu_open && !(app.active && capturable()) && now - app.last_revalidate >= REVALIDATE {
             app.last_revalidate = now;
             let _ = app.tx.send(Request::Revalidate);
         }
@@ -562,6 +578,7 @@ fn hide(app: &mut App) {
     app.flashing = false;
     app.translating = false;
     app.translation = None;
+    app.stale = false;
 }
 
 /// The Vietnamese reading arrived for the image on screen: swap the words in,
@@ -716,7 +733,14 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
         }
         WM_RBUTTONUP => {
             if with_app(|app| app.has_selection()).unwrap_or(false) {
+                with_app(|app| app.menu_open = true);
                 unsafe { selection_menu(hwnd) };
+                with_app(|app| {
+                    app.menu_open = false;
+                    if app.stale {
+                        hide_stale(app);
+                    }
+                });
             }
             LRESULT(0)
         }
@@ -863,7 +887,19 @@ fn on_button_up(app: &mut App) {
     unsafe {
         let _ = ReleaseCapture();
     }
+    if app.stale {
+        hide_stale(app);
+        return;
+    }
     offer_actions(app);
+}
+
+/// Hides an overlay whose image moved or changed, and looks again where
+/// the cursor rests.
+fn hide_stale(app: &mut App) {
+    hide(app);
+    app.still_since = Instant::now();
+    app.requested = false;
 }
 
 fn on_double_click(app: &mut App, pt: POINT) {
@@ -1266,8 +1302,7 @@ fn render(app: &App) {
         // QC_CAPTURABLE=1: screenshots can see the overlay while it has focus
         // (selection, translation), for checking how it is drawn. Never while
         // a translation measures the image, nor while revalidation runs.
-        static CAPTURABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *CAPTURABLE.get_or_init(|| std::env::var_os("QC_CAPTURABLE").is_some()) {
+        if capturable() {
             let affinity = if app.active && !app.translating { WDA_NONE } else { WDA_EXCLUDEFROMCAPTURE };
             let _ = SetWindowDisplayAffinity(app.overlay, affinity);
         }

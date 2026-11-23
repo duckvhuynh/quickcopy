@@ -1,0 +1,23 @@
+[
+ {"id": "vi-web-wiki-hanoi", "url": "https://vi.wikipedia.org/wiki/H%C3%A0_N%E1%BB%99i", "width": 1280, "height": 800, "category": "wiki"},
+ {"id": "vi-web-wiki-pho-m", "url": "https://vi.m.wikipedia.org/wiki/Ph%E1%BB%9F", "width": 390, "height": 844, "category": "wiki"},
+ {"id": "vi-web-wiki-tiengviet-dark", "url": "https://vi.wikipedia.org/wiki/Ti%E1%BA%BFng_Vi%E1%BB%87t?vectornightmode=1", "width": 1280, "height": 800, "dark": true, "category": "wiki"},
+ {"id": "vi-web-wiki-kieu-zoom", "url": "https://vi.wikipedia.org/wiki/Truy%E1%BB%87n_Ki%E1%BB%81u", "width": 1280, "height": 800, "zoom": 1.25, "category": "wiki"},
+ {"id": "vi-web-wiki-halong-m-dark", "url": "https://vi.m.wikipedia.org/wiki/V%E1%BB%8Bnh_H%E1%BA%A1_Long?minervanightmode=1", "width": 390, "height": 844, "dark": true, "category": "wiki"},
+ {"id": "vi-web-vnexpress", "url": "https://vnexpress.net/nha-tho-duc-ba-sai-gon-ruc-sang-voi-1-000-km-day-den-led-5148199.html", "width": 1280, "height": 800, "category": "news", "drop": ["24o"]},
+ {"id": "vi-web-vnexpress-m", "url": "https://vnexpress.net/jensen-huang-quay-ve-lam-ceo-nvidia-5148234.html", "width": 390, "height": 844, "category": "news"},
+ {"id": "vi-web-tuoitre-zoom", "url": "https://tuoitre.vn/con-tom-om-giac-mo-lam-giau-100261121114826131.htm", "width": 1280, "height": 800, "zoom": 0.8, "category": "news"},
+ {"id": "vi-web-thanhnien-m", "url": "https://thanhnien.vn/bao-tang-tphcm-mo-cua-ban-dem-khach-duoc-mac-viet-phuc-mien-phi-185261122215706506.htm", "width": 390, "height": 844, "category": "news"},
+ {"id": "vi-web-dantri-zoom", "url": "https://dantri.com.vn/ban-doc/ha-noi-xoa-vach-son-chia-o-do-xe-tren-via-he-sau-phan-anh-cua-dan-tri-20261123101341667.htm", "width": 1280, "height": 800, "zoom": 1.25, "category": "news"},
+ {"id": "vi-web-vietnamnet-m", "url": "https://vietnamnet.vn/jensen-huang-tro-lai-lam-ceo-nvidia-co-phieu-tang-vot-2577980.html", "width": 390, "height": 844, "category": "news"},
+ {"id": "vi-web-baochinhphu", "url": "https://baochinhphu.vn/", "width": 1280, "height": 800, "category": "news"},
+ {"id": "vi-web-chinhphu", "url": "https://chinhphu.vn/", "width": 1280, "height": 800, "category": "gov"},
+ {"id": "vi-web-hust", "url": "https://hust.edu.vn/", "width": 1280, "height": 800, "zoom": 1.25, "category": "edu"},
+ {"id": "vi-web-recipe", "url": "https://www.dienmayxanh.com/vao-bep/bi-quyet-lam-ca-hap-nuoc-tuong-ngot-thit-thom-ngon-dam-da-cuc-24508", "width": 390, "height": 844, "category": "blog"},
+ {"id": "vi-web-travel", "url": "https://www.ivivu.com/blog/2013/09/du-lich-da-lat-cam-nang-tu-a-den-z/", "width": 1280, "height": 800, "category": "blog"},
+ {"id": "vi-web-react-docs-dark", "url": "https://vi.react.dev/learn", "width": 1280, "height": 800, "dark": true, "category": "docs"},
+ {"id": "vi-web-github-readme", "url": "https://github.com/makerviet/meo-guide/blob/master/README.md", "width": 1280, "height": 800, "category": "docs"},
+ {"id": "vi-web-github-readme-m-dark", "url": "https://github.com/LQDJudge/online-judge/blob/master/README.md", "width": 390, "height": 844, "dark": true, "category": "docs"},
+ {"id": "vi-web-forum-otofun", "url": "https://www.otofun.net/threads/bao-duong-volvo-re-nhu-xe-co.1949244/", "width": 1280, "height": 800, "zoom": 1.25, "dark": true, "category": "forum"},
+ {"id": "vi-web-forum-tinhte-m", "url": "https://tinhte.vn/thread/11-loai-tai-khoan-tao-truoc-28-9-2026-phai-duoc-lien-ket-xac-thuc-voi-vneid-truoc-ngay.4195106/", "width": 390, "height": 844, "category": "forum"}
+]

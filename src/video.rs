@@ -15,7 +15,7 @@ use std::cell::OnceCell;
 use windows::Media::Control::{GlobalSystemMediaTransportControlsSessionManager as Manager, GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status};
 use windows::Win32::Foundation::*;
 use windows::Win32::Storage::Packaging::Appx::GetApplicationUserModelId;
-use windows::Win32::System::Com::IServiceProvider;
+use windows::Win32::System::Com::{IDispatch, IServiceProvider};
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::*;
@@ -80,16 +80,83 @@ pub fn attributes_at(pt: POINT) -> Option<String> {
 
 /// The screen rect of the HTML `<video>` at a screen point: the object
 /// there or one of its ancestors (a player's control panel lies inside the
-/// video it controls).
+/// video it controls), or a `<video>` under the point in another branch of
+/// one of those ancestors. X, Facebook and Threads lay a transparent `<div>`
+/// over the video beside it, not inside it; the object at the point is
+/// that layer, and the video is three or four levels up and down again.
 pub fn video_at(pt: POINT) -> Option<RECT> {
     let mut object = object_at(pt)?;
-    for _ in 0..4 {
-        if attributes(&object).and_then(|a| attribute(&a, "tag")).as_deref() == Some("video") {
-            let (mut x, mut y, mut w, mut h) = (0, 0, 0, 0);
-            unsafe { object.accLocation(&mut x, &mut y, &mut w, &mut h, &VARIANT::from(SELF)).ok()? };
-            return Some(RECT { left: x, top: y, right: x + w, bottom: y + h });
+    let mut budget = SEARCH_BUDGET;
+    for _ in 0..5 {
+        if let Some(rect) = tagged_rect(&object, "video") {
+            return Some(rect);
         }
-        object = unsafe { object.accParent().ok()?.cast().ok()? };
+        let parent: IAccessible = unsafe { object.accParent().ok()?.cast().ok()? };
+        if let Some(rect) = tagged_below(&parent, pt, "video", 4, &mut budget) {
+            return Some(rect);
+        }
+        object = parent;
+    }
+    None
+}
+
+/// Objects looked at below the ancestors, at most: a feed's post is a few
+/// dozen, and the search runs each time the cursor rests on a web page.
+const SEARCH_BUDGET: u32 = 120;
+
+/// The screen rect of an `<img>` at a screen point inside a link or button
+/// that UI Automation reports instead of the image (Threads wraps each
+/// photo in a link named "Photo by ...").
+pub fn image_at(pt: POINT) -> Option<RECT> {
+    let object = object_at(pt)?;
+    tagged_rect(&object, "img").or_else(|| tagged_below(&object, pt, "img", 3, &mut SEARCH_BUDGET.clone()))
+}
+
+/// The object's rect if its HTML tag is `tag`.
+fn tagged_rect(object: &IAccessible, tag: &str) -> Option<RECT> {
+    if attributes(object).and_then(|a| attribute(&a, "tag")).as_deref() != Some(tag) {
+        return None;
+    }
+    let (mut x, mut y, mut w, mut h) = (0, 0, 0, 0);
+    unsafe { object.accLocation(&mut x, &mut y, &mut w, &mut h, &VARIANT::from(SELF)).ok()? };
+    Some(RECT { left: x, top: y, right: x + w, bottom: y + h })
+}
+
+/// An element with HTML tag `tag` holding `pt` among the descendants of
+/// `object`, `depth` levels down at most, going only into objects whose
+/// rect holds `pt`.
+fn tagged_below(object: &IAccessible, pt: POINT, tag: &str, depth: u32, budget: &mut u32) -> Option<RECT> {
+    if depth == 0 || *budget == 0 {
+        return None;
+    }
+    let count = unsafe { object.accChildCount() }.ok()?.clamp(0, 64);
+    let mut children = vec![VARIANT::default(); count as usize];
+    let mut got = 0;
+    unsafe { AccessibleChildren(object, 0, &mut children, &mut got).ok()? };
+    for child in children.iter().take(got as usize) {
+        *budget = budget.saturating_sub(1);
+        if *budget == 0 {
+            return None;
+        }
+        let Ok(dispatch) = IDispatch::try_from(child) else {
+            continue;
+        };
+        let Ok(child) = dispatch.cast::<IAccessible>() else {
+            continue;
+        };
+        let (mut x, mut y, mut w, mut h) = (0, 0, 0, 0);
+        if unsafe { child.accLocation(&mut x, &mut y, &mut w, &mut h, &VARIANT::from(SELF)) }.is_err() {
+            continue;
+        }
+        if !(x..x + w).contains(&pt.x) || !(y..y + h).contains(&pt.y) {
+            continue;
+        }
+        if let Some(rect) = tagged_rect(&child, tag) {
+            return Some(rect);
+        }
+        if let Some(rect) = tagged_below(&child, pt, tag, depth - 1, budget) {
+            return Some(rect);
+        }
     }
     None
 }

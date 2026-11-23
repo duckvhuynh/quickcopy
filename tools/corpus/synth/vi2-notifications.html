@@ -1,0 +1,31 @@
+<!doctype html><html lang="vi"><head><meta charset="utf-8">
+<meta name="size" content="420x820"><meta name="category" content="app-ui-vi">
+<style>
+*{box-sizing:border-box}
+body{margin:0;width:420px;height:820px;background:#fff;font-family:'Segoe UI',Helvetica,Arial,sans-serif;color:#050505;overflow:hidden;padding:12px 8px}
+h2{font-size:24px;font-weight:700;margin:0 8px 8px}
+.tabs span{display:inline-block;font-size:15px;font-weight:600;padding:6px 12px;border-radius:18px;margin-left:4px}
+.tabs .on{background:#e7f3ff;color:#1877f2}
+h3{font-size:17px;font-weight:600;margin:14px 8px 4px;display:flex;justify-content:space-between}
+h3 a{color:#1877f2;font-size:15px;font-weight:400}
+.n{display:flex;gap:10px;padding:8px;border-radius:8px;align-items:center}
+.av{width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#ffe0b2,#ff8a65);flex:none}
+.t{font-size:15px;line-height:1.33}
+.t b{font-weight:600}
+.tm{font-size:13px;color:#1877f2;font-weight:600;margin-top:2px}
+.old .tm{color:#65676b;font-weight:400}
+.dot{width:12px;height:12px;border-radius:50%;background:#1877f2;flex:none}
+.btn{margin:12px 8px;background:#e4e6eb;border-radius:6px;text-align:center;padding:8px;font-weight:600;font-size:15px}
+</style></head><body>
+<h2 data-expect>Thông báo</h2>
+<div class="tabs"><span class="on" data-expect>Tất cả</span><span data-expect>Chưa đọc</span></div>
+<h3><span data-expect>Mới</span><a data-expect>Xem tất cả</a></h3>
+<div class="n"><div class="av"></div><div class="t"><span data-expect><b>Nguyễn Hưởng</b> đã bình luận về ảnh của bạn: "Đẹp quá trời luôn!"</span><div class="tm" data-expect>12 phút trước</div></div><div class="dot"></div></div>
+<div class="n"><div class="av"></div><div class="t"><span data-expect>Hôm nay là sinh nhật của <b>Đặng Quốc Khánh</b>. Hãy chúc anh ấy một ngày tuyệt vời!</span> 🎂<div class="tm" data-expect>1 giờ trước</div></div><div class="dot"></div></div>
+<h3><span data-expect>Trước đó</span></h3>
+<div class="n old"><div class="av"></div><div class="t"><span data-expect>Bạn có 3 lời mời kết bạn mới.</span><div class="tm" data-expect>5 giờ trước</div></div></div>
+<div class="n old"><div class="av"></div><div class="t"><span data-expect><b>Nhóm Yêu Sách Cũ</b> có 15 bài viết mới mà bạn có thể quan tâm.</span><div class="tm" data-expect>Hôm qua lúc 21:40</div></div></div>
+<div class="n old"><div class="av"></div><div class="t"><span data-expect><b>Lý Thị Xuyến</b> và 6 người khác đã bày tỏ cảm xúc về bài viết của bạn.</span><div class="tm" data-expect>3 ngày trước</div></div></div>
+<div class="n old"><div class="av"></div><div class="t"><span data-expect>Kỷ niệm: Bạn có những kỷ niệm với <b>Phan Thị Nghiêm</b> từ 6 năm trước.</span><div class="tm" data-expect>1 tuần trước</div></div></div>
+<div class="btn" data-expect>Xem thông báo trước đó</div>
+</body></html>

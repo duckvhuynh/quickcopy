@@ -1,0 +1,32 @@
+<!doctype html><html lang="vi"><head><meta charset="utf-8">
+<meta name="size" content="1080x2000"><meta name="category" content="app-ui-vi">
+<style>
+*{box-sizing:border-box}
+html{zoom:2.5}
+body{margin:0;width:432px;height:800px;background:linear-gradient(180deg,#4a78a8,#7c9cbd 60%,#a9b9c9);font-family:'Segoe UI',Arial,sans-serif;color:#fff;overflow:hidden;padding:30px 16px}
+.c{text-align:center}
+.city{font-size:30px;font-weight:400}
+.my{font-size:12px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;opacity:.85}
+.tmp{font-size:84px;font-weight:200;line-height:1}
+.cond{font-size:19px;font-weight:500}
+.hl{font-size:17px;font-weight:500}
+.box{background:rgba(30,60,100,.28);border-radius:14px;padding:12px;margin-top:14px}
+.box .h{font-size:12px;text-transform:uppercase;opacity:.7;font-weight:600;padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,.25)}
+.hr{display:flex;justify-content:space-between;text-align:center;font-size:14px;padding-top:8px}
+.hr b{display:block;font-size:17px;font-weight:500;margin-top:4px}
+.d{display:flex;justify-content:space-between;font-size:16px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.15)}
+.d .n{width:90px}
+.g{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.g .box b{font-size:26px;font-weight:400;display:block}
+.g .box span{font-size:13px}
+</style></head><body>
+<div class="c"><div class="my" data-expect>Vị trí của tôi</div><div class="city" data-expect>Hà Nội</div><div class="tmp" data-expect>24°</div><div class="cond" data-expect>Nhiều mây</div><div class="hl" data-expect>C:27° T:19°</div></div>
+<div class="box"><div style="font-size:14px;padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,.25)" data-expect>Mưa rào nhẹ dự kiến vào khoảng 15:00. Gió giật lên tới 20 km/h.</div>
+<div class="hr"><div><span data-expect>Bây giờ</span><b>24°</b></div><div><span data-expect>14 giờ</span><b>25°</b></div><div><span data-expect>15 giờ</span><b>23°</b></div><div><span data-expect>16 giờ</span><b>22°</b></div><div><span data-expect>17 giờ</span><b>21°</b></div></div></div>
+<div class="box"><div class="h" data-expect>Dự báo 10 ngày</div>
+<div class="d"><span class="n" data-expect>Hôm nay</span><span>🌧</span><span>19° — 27°</span></div>
+<div class="d"><span class="n" data-expect>Thứ Ba</span><span>⛅</span><span>18° — 25°</span></div>
+<div class="d"><span class="n" data-expect>Thứ Tư</span><span>☀️</span><span>17° — 26°</span></div></div>
+<div class="g"><div class="box"><div class="h" data-expect>Chỉ số UV</div><b>3</b><span data-expect>Trung bình</span></div><div class="box"><div class="h" data-expect>Độ ẩm</div><b data-expect>78%</b><span data-expect>Điểm sương hiện tại là 20°.</span></div></div>
+<div class="box"><div class="h" data-expect>Chất lượng không khí</div><span style="font-size:15px" data-expect>Kém - nhóm nhạy cảm nên hạn chế ra ngoài trời.</span></div>
+</body></html>

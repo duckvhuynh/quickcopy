@@ -6,3 +6,4 @@
 /tools/video/out/
 /tools/corpus/web/
 __pycache__/
+/tools/corpus/manifests/local-*.json

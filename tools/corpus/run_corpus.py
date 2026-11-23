@@ -11,6 +11,11 @@ ignored. Phrases of 20 characters or more may differ a little (similarity
 0.92: a wrong letter in a sentence passes, a missing word fails); shorter
 ones must match exactly, since a wrong letter there is a wrong word. Prints each image's
 score and the phrases it missed; exits 1 if any phrase was missed.
+
+The similarity allowed for long phrases would let a wrong tone mark pass
+("Chuyển khoản" read as "Chuyến khoản"), so words are also checked on
+their own: an expected word that was not read, while the same word with
+other marks was, counts as a wrong mark and is listed.
 """
 import difflib
 import glob
@@ -19,6 +24,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 
 sys.stdout.reconfigure(encoding="utf-8")
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -65,13 +71,35 @@ def found(phrase, text):
     return False
 
 
+def bare(w):
+    w = unicodedata.normalize("NFD", w)
+    return "".join(c for c in w if not unicodedata.combining(c)).replace("đ", "d")
+
+
+def words(s):
+    return [w for w in re.findall(r"\w+", unicodedata.normalize("NFC", s.lower())) if any(c.isalpha() for c in w)]
+
+
+def wrong_marks(expect, read_text):
+    """Expected words read with other tone marks, as (expected, read)."""
+    read = set(words(read_text))
+    by_bare = {}
+    for w in sorted(read):
+        by_bare.setdefault(bare(w), w)
+    out = []
+    for w in dict.fromkeys(w for p in expect for w in words(p)):
+        if w not in read and bare(w) in by_bare:
+            out.append((w, by_bare[bare(w)]))
+    return out
+
+
 entries = []
 for path in sorted(glob.glob(os.path.join(HERE, "manifests", "*.json"))):
     for e in json.load(open(path, encoding="utf-8")):
         e["_manifest"] = os.path.basename(path)
         entries.append(e)
 
-total = hit = images = missing_files = 0
+total = hit = images = missing_files = marks = 0
 for e in entries:
     if only and e["id"] not in only:
         continue
@@ -84,12 +112,16 @@ for e in entries:
     m = re.search(r"--- text ---\n(.*?)\n--- word boxes ---", out, flags=re.S)
     text = norm(m.group(1)) if m else ""
     misses = [p for p in e["expect"] if not found(p, text)]
+    wrong = wrong_marks(e["expect"], text)
+    marks += len(wrong)
     images += 1
     total += len(e["expect"])
     hit += len(e["expect"]) - len(misses)
-    if misses or "--show-pass" in sys.argv:
-        print(f"{'FAIL' if misses else 'PASS'} {e['id']} [{e['category']}] {len(e['expect']) - len(misses)}/{len(e['expect'])}")
+    if misses or wrong or "--show-pass" in sys.argv:
+        print(f"{'FAIL' if misses or wrong else 'PASS'} {e['id']} [{e['category']}] {len(e['expect']) - len(misses)}/{len(e['expect'])}")
         for p in misses:
             print(f"    missed: {p!r}")
-print(f"\n{images} images, {hit}/{total} phrases read ({100 * hit / max(1, total):.1f}%)" + (f", {missing_files} not downloaded" if missing_files else ""))
-sys.exit(1 if hit < total else 0)
+        if wrong:
+            print("    wrong marks: " + ", ".join(f"{a} -> {b}" for a, b in wrong))
+print(f"\n{images} images, {hit}/{total} phrases read ({100 * hit / max(1, total):.1f}%), {marks} words with wrong marks" + (f", {missing_files} not downloaded" if missing_files else ""))
+sys.exit(1 if hit < total or marks else 0)

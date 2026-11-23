@@ -26,6 +26,12 @@ const GAP_CELLS: usize = 3;
 /// Line height range, in pixels of the 2x capture (text 6-45 px tall).
 const MIN_H: usize = 12;
 const MAX_H: usize = 90;
+/// More candidate lines than fit in this many pixels of sheets is a photo's
+/// texture (leaves, a brick wall, a chalkboard), not text Windows OCR
+/// skipped: reading them took up to 0.7 s (1.9 s before sheets were
+/// made narrow) and gave back a few junk words,
+/// so none are returned. Time follows the area read.
+pub const MAX_AREA: usize = 5_000_000;
 /// Rows of a component with at most this share of its busiest row's
 /// edges separate two lines.
 const VALLEY: f32 = 0.08;
@@ -34,7 +40,8 @@ fn diff(px: &[u8], i: usize, j: usize) -> i32 {
     (px[i] as i32 - px[j] as i32).abs() + (px[i + 1] as i32 - px[j + 1] as i32).abs() + (px[i + 2] as i32 - px[j + 2] as i32).abs()
 }
 
-/// Lines of text-like ink in a BGRA image that no box in `found` covers.
+/// Lines of text-like ink in a BGRA image that no box in `found` covers
+/// (none when their sheets would be larger than `MAX_AREA`).
 pub fn bands(px: &[u8], w: usize, h: usize, found: &[Band]) -> Vec<Band> {
     if w < 16 || h < MIN_H {
         return Vec::new();
@@ -118,6 +125,9 @@ pub fn bands(px: &[u8], w: usize, h: usize, found: &[Band]) -> Vec<Band> {
             }
         }
     }
+    if out.iter().map(|b| outer(b).0 * outer(b).1).sum::<usize>() > MAX_AREA {
+        return Vec::new();
+    }
     out.sort_by_key(|b| (b.1, b.0));
     out
 }
@@ -164,51 +174,54 @@ pub struct Sheet {
     pub placed: Vec<(Band, (usize, usize))>,
 }
 
-/// Lays `bands` of `px` out on sheets no taller than `max_h`.
+/// Space around a line on a sheet: its own height, at least 8 px.
+fn margin(b: &Band) -> usize {
+    (b.3 - b.1).max(8)
+}
+
+/// A line's size on a sheet, with its margins.
+fn outer(b: &Band) -> (usize, usize) {
+    (b.2 - b.0 + 2 * margin(b), b.3 - b.1 + 2 * margin(b))
+}
+
+/// Lays `bands` of `px` out on sheets no taller than `max_h`. Lines of
+/// about the same width share a sheet as wide as the widest of them, so a
+/// few long lines do not make every sheet wide (a photo's candidates once
+/// made 87 Mpx of sheets for 2 Mpx of lines).
 pub fn sheets(px: &[u8], w: usize, bands: &[Band], max_h: usize) -> Vec<Sheet> {
-    let margin = |b: &Band| (b.3 - b.1).max(8);
-    let width = bands.iter().map(|b| b.2 - b.0 + 2 * margin(b)).max().unwrap_or(0);
+    let mut order: Vec<Band> = bands.iter().copied().filter(|b| outer(b).1 <= max_h).collect();
+    order.sort_by_key(|b| std::cmp::Reverse(outer(b).0));
     let mut out: Vec<Sheet> = Vec::new();
-    let mut group: Vec<Band> = Vec::new();
-    let mut height = 0;
-    let flush = |group: &mut Vec<Band>, height: usize, out: &mut Vec<Sheet>| {
-        if group.is_empty() {
-            return;
+    let mut start = 0;
+    while start < order.len() {
+        let width = outer(&order[start]).0;
+        let mut end = start;
+        let mut height = 0;
+        while end < order.len() && height + outer(&order[end]).1 <= max_h && outer(&order[end]).0 * 2 > width {
+            height += outer(&order[end]).1;
+            end += 1;
         }
         let mut sheet = Sheet { px: vec![0; width * height * 4], w: width, h: height, placed: Vec::new() };
         let mut y = 0;
-        for b in group.drain(..) {
-            let m = margin(&b);
+        for b in &order[start..end] {
+            let m = margin(b);
             let (bw, bh) = (b.2 - b.0, b.3 - b.1);
             // The line's background: the most common of its border pixels.
-            let bg = background(px, w, &b);
-            for yy in y..y + bh + 2 * m {
-                for xx in 0..width {
-                    sheet.px[(yy * width + xx) * 4..][..4].copy_from_slice(&bg);
-                }
+            let bg = background(px, w, b);
+            for p in sheet.px[y * width * 4..(y + bh + 2 * m) * width * 4].chunks_exact_mut(4) {
+                p.copy_from_slice(&bg);
             }
             for row in 0..bh {
                 let src = ((b.1 + row) * w + b.0) * 4;
                 let dst = ((y + m + row) * width + m) * 4;
                 sheet.px[dst..dst + bw * 4].copy_from_slice(&px[src..src + bw * 4]);
             }
-            sheet.placed.push((b, (m, y + m)));
+            sheet.placed.push((*b, (m, y + m)));
             y += bh + 2 * m;
         }
         out.push(sheet);
-    };
-    for b in bands {
-        let need = b.3 - b.1 + 2 * margin(b);
-        if height + need > max_h {
-            flush(&mut group, height, &mut out);
-            height = 0;
-        }
-        if need <= max_h {
-            group.push(*b);
-            height += need;
-        }
+        start = end;
     }
-    flush(&mut group, height, &mut out);
     out
 }
 
@@ -229,7 +242,8 @@ fn background(px: &[u8], w: usize, b: &Band) -> [u8; 4] {
         add(b.0, y);
         add(b.2 - 1, y);
     }
-    counts.into_values().max_by_key(|e| e.0).map_or([255; 4], |e| e.1)
+    // Ties go to one color always (not to the map's order, which changes).
+    counts.into_values().max_by_key(|e| (e.0, e.1)).map_or([255; 4], |e| e.1)
 }
 
 #[cfg(test)]
@@ -307,6 +321,20 @@ mod tests {
         rule(&mut px, w, 10, 390, 40);
         rule(&mut px, w, 10, 390, 80);
         assert!(bands(&px, w, h, &[]).is_empty());
+    }
+
+    #[test]
+    fn the_background_of_a_line_is_the_same_every_time() {
+        // Two colors equally common on the line's border: which one was
+        // picked followed the hash map's order, so the same image read
+        // differently from one hover to the next.
+        let (w, h) = (10, 2);
+        let mut px = canvas(w, h);
+        for x in 0..w {
+            px[(w + x) * 4..][..3].copy_from_slice(&[200, 200, 200]);
+        }
+        let first = background(&px, w, &(0, 0, w, h));
+        assert!((0..64).all(|_| background(&px, w, &(0, 0, w, h)) == first));
     }
 
     #[test]

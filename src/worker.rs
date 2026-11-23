@@ -220,12 +220,25 @@ impl Detector {
         let mut media = video.map(|_| Media::Tab(unsafe { GetAncestor(WindowFromPoint(pt), GA_ROOT) }));
         // Pictures that may be a video: read once they stop moving.
         let mut may_play = media.is_some();
-        let (clip, tracked) = if control_type == UIA_ImageControlTypeId || video.is_some() {
+        // A photo inside a link or button that UI Automation reports in its
+        // place (Threads: a link named "Photo by ..."). With an <img alt="">
+        // the photo is not in the tree at all, and the link is empty: a big
+        // link with nothing inside is taken for the picture it shows.
+        let wrapped = if [UIA_HyperlinkControlTypeId, UIA_ButtonControlTypeId].contains(&control_type) && is_web(&element) {
+            crate::video::image_at(pt).or_else(|| {
+                let r = unsafe { element.CurrentBoundingRectangle() }.ok()?;
+                let empty = unsafe { self.uia.RawViewWalker().and_then(|w| w.GetFirstChildElement(&element)) }.is_err();
+                (empty && r.right - r.left >= SURFACE_MIN_W && r.bottom - r.top >= SURFACE_MIN_H).then_some(r)
+            })
+        } else {
+            None
+        };
+        let (clip, tracked) = if control_type == UIA_ImageControlTypeId || video.is_some() || wrapped.is_some() {
             let element_rect = unsafe { element.CurrentBoundingRectangle()? };
-            // The element UI Automation found may be a box around the video:
-            // the video's own rect is what gets read; the element is kept to
-            // notice the video moving only when it is the video.
-            let (element_rect, tracked) = match video {
+            // The element UI Automation found may be a box around the video
+            // (or photo): the video's own rect is what gets read; the element
+            // is kept to notice the video moving only when it is the video.
+            let (element_rect, tracked) = match video.or(wrapped) {
                 Some(rect) if rect != element_rect => (rect, None),
                 _ => (element_rect, Some(element.clone())),
             };
@@ -610,17 +623,7 @@ impl Detector {
                 };
                 // Back to where the line is in the image.
                 let (dx, dy) = (band.0 as f32 - x as f32, band.1 as f32 - y as f32);
-                // A piece of a word already read (the end of a tilted line
-                // sticking out of its box, above or below it) is not read twice.
-                let covered = |w: &Box4| {
-                    read.iter().flatten().any(|(r, _)| {
-                        let reach = (r.3 - r.1) / 2.0;
-                        let x = (w.2.min(r.2) - w.0.max(r.0)).max(0.0);
-                        let y = (w.3.min(r.3 + reach) - w.1.max(r.1 - reach)).max(0.0);
-                        x * y * 10.0 > (w.2 - w.0) * (w.3 - w.1) * 3.0
-                    })
-                };
-                let line: Vec<_> = line.into_iter().map(|((l, t, r, b), s)| ((l + dx, t + dy, r + dx, b + dy), s)).filter(|(w, _)| !covered(w)).collect();
+                let line: Vec<_> = line.into_iter().map(|((l, t, r, b), s)| ((l + dx, t + dy, r + dx, b + dy), s)).filter(|(w, s)| !already_read(w, s, read)).collect();
                 // Specks of a picture read as a letter or two are not text.
                 if line.iter().map(|(_, s)| s.chars().filter(|c| c.is_alphanumeric()).count()).sum::<usize>() >= 2 {
                     out.push(line);
@@ -1125,12 +1128,33 @@ fn without_shapes(lines: Vec<Vec<(Box4, String)>>) -> Vec<Vec<(Box4, String)>> {
     heights.sort_by(f32::total_cmp);
     let limit = heights[heights.len() / 2] * 3.0;
     let before = heights.len();
-    let kept: Vec<Vec<(Box4, String)>> = lines.into_iter().map(|l| l.into_iter().filter(|(b, s)| b.3 - b.1 <= limit || !s.chars().all(|c| "Il1|![]".contains(c))).collect::<Vec<_>>()).filter(|l| !l.is_empty()).collect();
+    let kept: Vec<Vec<(Box4, String)>> = lines.into_iter().map(|l| l.into_iter().filter(|(b, s)| b.3 - b.1 <= limit || !s.chars().all(|c| "Il|[]".contains(c))).collect::<Vec<_>>()).filter(|l| !l.is_empty()).collect();
     let dropped = before - kept.iter().map(Vec::len).sum::<usize>();
     if dropped > 0 {
         log(format!("dropped {dropped} words taller than {limit:.0} px (shapes, not text)"));
     }
     kept
+}
+
+/// Whether a word of the second read is a piece of one already read: it
+/// lies on that word, or right above or below it (the end of a tilted line
+/// sticking out of its box) with the same letters. The letters matter: in
+/// a tightly stacked list the line Windows OCR skipped also lies right
+/// under a word that was read, and it is the one this read is for.
+fn already_read(w: &Box4, text: &str, read: &[Vec<(Box4, String)>]) -> bool {
+    let letters = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
+    let mine = letters(text);
+    let over = |r: &Box4, reach: f32| {
+        let x = (w.2.min(r.2) - w.0.max(r.0)).max(0.0);
+        let y = (w.3.min(r.3 + reach) - w.1.max(r.1 - reach)).max(0.0);
+        x * y * 10.0 > (w.2 - w.0) * (w.3 - w.1) * 3.0
+    };
+    read.iter().flatten().any(|(r, s)| {
+        over(r, 0.0) || {
+            let theirs = letters(s);
+            over(r, (r.3 - r.1) / 2.0) && (mine.is_empty() || theirs.contains(&mine) || (!theirs.is_empty() && mine.contains(&theirs)))
+        }
+    })
 }
 
 fn line_bounds(line: &[(Box4, String)]) -> Box4 {
@@ -1226,11 +1250,23 @@ fn words_from_chars(crop: &Crop, chars: &[viet::RecChar], boxes: &[(Box4, String
         // not read). Snapping to it stacked them all on its edge, 1 px wide.
         let middles: Vec<f32> = out.iter().map(|(bx, _)| (bx.0 + bx.2) / 2.0).collect();
         let measured: Vec<(f32, f32)> = measured.into_iter().filter(|g| !middles.iter().any(|m| (g.0..=g.1).contains(m))).collect();
+        // Each gap here with the measured gap nearest to it, and how far off.
+        let middle_of = |pair: &[(Box4, String)]| (pair[0].0.2 + pair[1].0.0) / 2.0;
+        let nearest: Vec<Option<(usize, f32)>> = out
+            .windows(2)
+            .map(|pair| {
+                let middle = middle_of(pair);
+                let off = |gap: &(f32, f32)| (gap.0 - middle).max(middle - gap.1).max(0.0);
+                measured.iter().map(off).enumerate().min_by(|p, q| p.1.total_cmp(&q.1)).filter(|(_, off)| *off < reach)
+            })
+            .collect();
         let mut edges = vec![(left, left)];
-        edges.extend(out.windows(2).map(|pair| {
-            let middle = (pair[0].0.2 + pair[1].0.0) / 2.0;
-            let off = |gap: &(f32, f32)| (gap.0 - middle).max(middle - gap.1).max(0.0);
-            measured.iter().copied().min_by(|p, q| off(p).total_cmp(&off(q))).filter(|gap| off(gap) < reach).unwrap_or((middle, middle))
+        edges.extend(out.windows(2).zip(&nearest).map(|(pair, near)| {
+            // A measured gap is one gap here, the nearest: a short word
+            // beside it ("1" of "1 -129", read by Windows OCR as "1-129")
+            // has both its gaps within reach, and given the same one twice
+            // it was left 1 px wide under the next word.
+            near.filter(|(gap, off)| !nearest.iter().flatten().any(|(g, o)| g == gap && o < off)).map_or((middle_of(pair), middle_of(pair)), |(gap, _)| measured[gap])
         }));
         edges.push((right, right));
         for (o, edge) in out.iter_mut().zip(edges.windows(2)) {
@@ -1499,6 +1535,38 @@ mod tests {
         // is the one Windows OCR measured nearest to it.
         assert_eq!((words[0].0.0, words[0].0.2), (100.0, 180.0));
         assert_eq!((words[1].0.0, words[1].0.2), (190.0, 400.0));
+    }
+
+    #[test]
+    fn a_short_vietnamese_word_beside_a_gap_keeps_its_width() {
+        // Windows OCR read "1-129" as one word, the model as "1" and "-129".
+        // Both of the model's gaps are near the one gap Windows measured
+        // (before "1"); only the nearer one is that gap, or "1" is squeezed
+        // to 1 px between two copies of it and "-129" starts on top of it.
+        let crop = Crop { px: Vec::new(), w: 600, h: 40, x0: 0, top: 10.0, bottom: 50.0 };
+        let chars: Vec<viet::RecChar> = [('a', 0.02, 0.3), (' ', 0.31, 0.31), ('1', 0.335, 0.345), (' ', 0.35, 0.35), ('9', 0.37, 0.6)]
+            .iter()
+            .map(|&(ch, x0, x1)| viet::RecChar { ch, x0, x1 })
+            .collect();
+        let windows = [piece(10.0, 10.0, 185.0, 50.0, "a"), piece(200.0, 10.0, 365.0, 50.0, "1-9")];
+        let words = words_from_chars(&crop, &chars, &windows);
+        assert_eq!(texts(&[words.clone()]), ["a 1 9"]);
+        assert_eq!(words[1].0.0, 200.0, "{words:?}");
+        assert!(words[1].0.2 - words[1].0.0 >= 6.0, "{words:?}");
+        assert!(words[2].0.0 >= words[1].0.2, "{words:?}");
+    }
+
+    #[test]
+    fn a_skipped_line_between_two_read_lines_is_not_taken_for_a_piece_of_them() {
+        // A list of stacked /commands: the lines above and below were read,
+        // the one between was skipped and is read on the second pass.
+        let read = vec![vec![piece(576.0, 726.0, 796.0, 766.0, "/cube-spin")], vec![piece(576.0, 806.0, 890.0, 846.0, "/portal")]];
+        assert!(!already_read(&(576.0, 768.0, 886.0, 796.0), "/infinite-zoom", &read));
+        // The end of a tilted "Monday" sticking out under its box is.
+        let read = vec![vec![piece(100.0, 100.0, 300.0, 140.0, "Monday")]];
+        assert!(already_read(&(240.0, 142.0, 300.0, 162.0), "onday", &read));
+        // And anything lying on a word that was read.
+        assert!(already_read(&(120.0, 110.0, 200.0, 138.0), "Mon", &read));
     }
 
     #[test]

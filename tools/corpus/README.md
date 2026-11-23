@@ -12,6 +12,14 @@ python tools/corpus/run_corpus.py target/release/quickcopy.exe --english  # Wind
 
 `run_corpus.py` prints each image that missed a phrase, the phrases, and a
 total. `--only ID,ID` runs some images; `--show-pass` lists passing ones too.
+It also counts words read with other tone marks than shown ("Chuyển" read
+as "Chuyến"), which the similarity allowed for long phrases would hide.
+
+`gen_web.py` screenshots the real Vietnamese pages listed in
+`web_pages.json` with headless Edge and takes their visible text lines from
+the page as phrases (`manifests/vi-web.json`). A rerun takes new shots of
+pages that may have changed, so image and phrases are always regenerated
+together.
 
 ## Layout
 
@@ -23,6 +31,8 @@ total. `--only ID,ID` runs some images; `--show-pass` lists passing ones too.
    "license": "CC BY-SA 4.0", "category": "receipt", "lang": "en",
    "expect": ["Cappuccino", "TOTAL 12.50", "Thank you for visiting"]}
   ```
+- `manifests/local-*.json`: images from your own screen or feeds (other
+  people's posts), not in git.
 - `web/`: downloaded images, not in git (they belong to their authors).
   `fetch.py` downloads them again from `download`.
 - `synth/*.html`: pages made for hard cases; `gen_synth.py` renders them
