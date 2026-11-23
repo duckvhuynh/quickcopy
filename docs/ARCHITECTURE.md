@@ -157,7 +157,7 @@ Measured on a 14-line Vietnamese page: the overlay appears about 370 ms
 after the cursor rests on a new image (about 200 ms on an image already
 read), and the Vietnamese text is ready after about 500 ms.
 
-The executable is 0.8 MB and uses no GPU. Direct2D renders in software,
+The executable is under 1 MB (972,800 bytes for 0.1.0) and uses no GPU. Direct2D renders in software,
 because a hardware render target held about 31 MB for the life of the
 process and drew these small surfaces slower. QuickCopy uses about 3 MB of
 private memory when idle, and 110-175 MB while the Vietnamese model is

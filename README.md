@@ -10,7 +10,7 @@ QuickCopy works like Live Text or Google Lens, on Windows. Rest the cursor on an
 screenshot or a paused video, and the text in it becomes selectable like
 normal text. Copy it with Ctrl+C or translate it in place. QuickCopy reads
 English and Vietnamese, and all text recognition runs on your PC. It is a
-0.8 MB Rust program with a tray icon, no UI framework and no GPU use.
+1 MB Rust program with a tray icon, no UI framework and no GPU use.
 
 <!-- TODO: add a short GIF of selecting and translating text in an image,
      saved as docs/images/demo.gif, and show it here:
