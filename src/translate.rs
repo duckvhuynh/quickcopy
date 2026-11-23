@@ -31,12 +31,17 @@ pub type Rgb = [u8; 3];
 pub struct Unit {
     pub text: String,
     pub slices: Vec<RECT>,
+    /// The original text of each slice, used to match its look.
+    pub slice_texts: Vec<String>,
 }
 
 pub struct Slice {
     pub rect: RECT,
     pub background: Rgb,
     pub foreground: Rgb,
+    /// How the original text measures (size, baseline, stroke), if it could.
+    pub ink: Option<crate::style::Ink>,
+    pub original: String,
 }
 
 pub struct UnitResult {
@@ -74,9 +79,14 @@ fn run(clip: RECT, target: &str, units: Vec<Unit>) -> std::result::Result<Vec<Un
         let slices = unit
             .slices
             .iter()
-            .map(|&rect| {
+            .zip(unit.slice_texts)
+            .map(|(&rect, original)| {
                 let (background, foreground) = sample_colors(&pixels, w, h, rect);
-                Slice { rect, background, foreground }
+                // OCR boxes can clip ascenders and descenders; give the
+                // measurement the whole line height.
+                let pad = (rect.bottom - rect.top) / 4;
+                let ink = crate::style::measure(&pixels, w, h, inflate(rect, 0, pad), background, foreground);
+                Slice { rect, background, foreground, ink, original }
             })
             .collect();
         out.push(UnitResult { translation, slices });

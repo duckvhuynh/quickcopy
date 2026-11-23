@@ -11,7 +11,9 @@
 
 mod layout;
 mod paint;
+mod popover;
 mod rectfind;
+mod style;
 mod textmodel;
 mod translate;
 mod viet;
@@ -100,6 +102,8 @@ struct App {
     /// A translation request is out.
     translating: bool,
     translation: Option<Shown>,
+    /// Copy / Translate menu shown at the cursor after a selection.
+    popover: popover::Popover,
 }
 
 impl App {
@@ -159,6 +163,15 @@ fn main() -> Result<()> {
             ..Default::default()
         });
 
+        let popover_class = w!("QuickCopyPopover");
+        RegisterClassW(&WNDCLASSW {
+            lpfnWndProc: Some(popover_proc),
+            hInstance: instance,
+            lpszClassName: popover_class,
+            hCursor: LoadCursorW(None, IDC_ARROW)?,
+            ..Default::default()
+        });
+
         let main = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             main_class,
@@ -189,11 +202,27 @@ fn main() -> Result<()> {
             Some(instance),
             None,
         )?;
-        // Keep our own overlay out of screen captures so revalidation hashes
-        // stay stable. QC_CAPTURABLE=1 leaves it visible to screenshots, for
-        // checking what the overlay draws.
+        // Keep our own overlay out of screen captures: revalidation hashes
+        // and the translation's color/size measurements must see the image,
+        // not our highlight. (QC_CAPTURABLE: see `render`.)
+        let _ = SetWindowDisplayAffinity(overlay, WDA_EXCLUDEFROMCAPTURE);
+        // Owned by the overlay so it stays above it; never takes focus.
+        let popover_hwnd = CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            popover_class,
+            w!("QuickCopy Popover"),
+            WS_POPUP,
+            0,
+            0,
+            1,
+            1,
+            Some(overlay),
+            None,
+            Some(instance),
+            None,
+        )?;
         if std::env::var_os("QC_CAPTURABLE").is_none() {
-            let _ = SetWindowDisplayAffinity(overlay, WDA_EXCLUDEFROMCAPTURE);
+            let _ = SetWindowDisplayAffinity(popover_hwnd, WDA_EXCLUDEFROMCAPTURE);
         }
 
         let (tx, rx) = channel();
@@ -224,6 +253,7 @@ fn main() -> Result<()> {
                 last_dblclk: None,
                 translating: false,
                 translation: None,
+                popover: popover::Popover::new(popover_hwnd),
             })
         });
 
@@ -401,6 +431,7 @@ fn show(app: &mut App, data: OcrData) {
 }
 
 fn hide(app: &mut App) {
+    app.popover.hide();
     if app.active {
         deactivate(app);
     }
@@ -488,6 +519,7 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
             // with native text. Gaining focus is recorded by `activate`.
             if (wp.0 & 0xFFFF) as u32 == WA_INACTIVE {
                 with_app(|app| {
+                    app.popover.hide();
                     app.active = false;
                     app.anchor = app.focus;
                     app.dragging = false;
@@ -566,6 +598,66 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
     }
 }
 
+/// From Win32::UI::Controls, a large feature to enable for one constant.
+const WM_MOUSELEAVE: u32 = 0x02A3;
+
+unsafe extern "system" fn popover_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    let pt = POINT {
+        x: (lp.0 & 0xFFFF) as i16 as i32,
+        y: ((lp.0 >> 16) & 0xFFFF) as i16 as i32,
+    };
+    match msg {
+        // Clicking it must not take focus from the overlay.
+        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        WM_MOUSEMOVE => {
+            let mut track = TRACKMOUSEEVENT { cbSize: size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
+            unsafe {
+                let _ = TrackMouseEvent(&mut track);
+            }
+            with_app(|app| app.popover.set_hover(Some(pt)));
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            with_app(|app| app.popover.set_hover(None));
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN => LRESULT(0),
+        WM_LBUTTONUP => {
+            with_app(|app| {
+                if let Some(command) = app.popover.command_at(pt) {
+                    run_command(app, command);
+                }
+            });
+            LRESULT(0)
+        }
+        _ => unsafe { DefWindowProcW(hwnd, msg, wp, lp) },
+    }
+}
+
+/// Opens the Copy / Translate menu at the cursor for the current selection.
+fn offer_actions(app: &mut App) {
+    if !app.has_selection() {
+        return;
+    }
+    let mut at = POINT::default();
+    unsafe {
+        let _ = GetCursorPos(&mut at);
+    }
+    app.popover.show(at, popover::items(app.translation.is_some()));
+}
+
+fn run_command(app: &mut App, command: popover::Command) {
+    app.popover.hide();
+    match command {
+        popover::Command::Copy => copy_selection(app),
+        popover::Command::Translate => start_translation(app),
+        popover::Command::Original => {
+            app.translation = None;
+            render(app);
+        }
+    }
+}
+
 fn key_down(vk: VIRTUAL_KEY) -> bool {
     unsafe { GetKeyState(vk.0 as i32) < 0 }
 }
@@ -575,6 +667,7 @@ fn on_button_down(app: &mut App, pt: POINT) {
         return;
     }
     activate(app);
+    app.popover.hide();
     // A new selection starts from the original text.
     app.translation = None;
     let Some(model) = &app.model else { return };
@@ -588,6 +681,7 @@ fn on_button_down(app: &mut App, pt: POINT) {
             (app.anchor, app.focus) = (s, e);
             app.flashing = false;
             render(app);
+            offer_actions(app);
             return;
         }
     }
@@ -625,6 +719,7 @@ fn on_button_up(app: &mut App) {
     unsafe {
         let _ = ReleaseCapture();
     }
+    offer_actions(app);
 }
 
 fn on_double_click(app: &mut App, pt: POINT) {
@@ -635,6 +730,7 @@ fn on_double_click(app: &mut App, pt: POINT) {
     app.flashing = false;
     render(app);
     activate(app);
+    offer_actions(app);
 }
 
 /// Native text keys while the overlay has focus. Returns false for keys left
@@ -661,6 +757,7 @@ fn on_key(app: &mut App, vk: u16) -> bool {
         _ => None,
     };
     if let Some(t) = target {
+        app.popover.hide();
         app.focus = t;
         if !shift {
             app.anchor = t;
@@ -677,11 +774,16 @@ fn on_key(app: &mut App, vk: u16) -> bool {
             true
         }
         VK_C | VK_INSERT if ctrl => {
-            copy_selection(app);
+            run_command(app, popover::Command::Copy);
             true
         }
         VK_T if ctrl => {
-            start_translation(app);
+            run_command(app, popover::Command::Translate);
+            true
+        }
+        // Esc closes the menu first, then puts the original back, then dismisses.
+        VK_ESCAPE if app.popover.visible() => {
+            app.popover.hide();
             true
         }
         // Esc first puts the original text back, then dismisses.
@@ -749,7 +851,11 @@ fn copy_selection(app: &mut App) {
 /// Right-click menu for a selection. Runs a modal loop, so it must not hold
 /// the app borrow.
 unsafe fn selection_menu(overlay: HWND) {
-    let translated = with_app(|app| app.translation.is_some()).unwrap_or(false);
+    let translated = with_app(|app| {
+        app.popover.hide();
+        app.translation.is_some()
+    })
+    .unwrap_or(false);
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
         if translated {
@@ -804,7 +910,8 @@ fn start_translation(app: &mut App) {
         if text.trim().is_empty() {
             continue;
         }
-        units.push(Unit { text: text.trim().to_string(), slices: model.highlight(a, b) });
+        let (slices, slice_texts) = model.selected_lines(a, b).into_iter().unzip();
+        units.push(Unit { text: text.trim().to_string(), slices, slice_texts });
     }
     if units.is_empty() {
         return;
@@ -821,6 +928,7 @@ fn start_translation(app: &mut App) {
             if !ends && first.top - last.bottom <= 2 * h {
                 prev.text = format!("{} {}", prev.text, unit.text);
                 prev.slices.extend(unit.slices);
+                prev.slice_texts.extend(unit.slice_texts);
                 continue;
             }
         }
@@ -833,13 +941,13 @@ fn start_translation(app: &mut App) {
     translate::spawn(app.main, data.id, data.rect, TARGET_LANGUAGE, units);
 }
 
-/// A translation came back: wrap it into the selected line boxes, shrinking
-/// the font where it runs longer than the original, and paint it.
+/// A translation came back: draw it in the original's size and weight, on
+/// the original baselines, wrapped into the selected line boxes.
 fn apply_translation(app: &mut App, translated: Translated) {
     app.translating = false;
-    if app.data.as_ref().is_none_or(|d| d.id != translated.id) {
+    let Some(image_w) = app.data.as_ref().filter(|d| d.id == translated.id).map(|d| d.rect.right - d.rect.left) else {
         return;
-    }
+    };
     let units = match translated.result {
         Ok(units) => units,
         Err(e) => {
@@ -848,27 +956,66 @@ fn apply_translation(app: &mut App, translated: Translated) {
             return;
         }
     };
+    let median = |mut v: Vec<f32>| {
+        v.sort_by(f32::total_cmp);
+        v.get(v.len() / 2).copied()
+    };
     let mut boxes = Vec::new();
     let mut text = Vec::new();
     for unit in &units {
         text.push(unit.translation.clone());
-        let mut heights: Vec<i32> = unit.slices.iter().map(|s| s.rect.bottom - s.rect.top).collect();
-        heights.sort_unstable();
-        let line_h = heights.get(heights.len() / 2).copied().unwrap_or(16) as f32;
-        let widths: Vec<f32> = unit.slices.iter().map(|s| (s.rect.right - s.rect.left) as f32 + line_h * 0.3).collect();
-        let fit = layout::fit(&unit.translation, &widths, line_h * 0.9, &mut paint::measure);
+        let inks: Vec<style::Ink> = unit.slices.iter().filter_map(|s| s.ink).collect();
+        let line_h = median(unit.slices.iter().map(|s| (s.rect.bottom - s.rect.top) as f32).collect()).unwrap_or(16.0);
+        // The original's look, from the median of its lines.
+        let original = (!inks.is_empty()).then(|| style::Ink {
+            body: median(inks.iter().map(|i| i.body).collect()).unwrap_or(1.0),
+            stroke: median(inks.iter().map(|i| i.stroke).collect()).unwrap_or(1.0),
+            baseline: 0.0,
+        });
+        let sample: String = unit.slices.iter().map(|s| s.original.as_str()).collect::<Vec<_>>().join(" ").chars().take(60).collect();
+        let matched = original.and_then(|ink| paint::match_style(&sample, ink));
+        let (size, weight) = matched.as_ref().map_or((line_h * 0.9, 400), |m| (m.size, m.weight));
+        log(format!("matched style: size {size:.1}px weight {weight} (body {:?})", original.map(|o| (o.body, o.stroke))));
+
+        // Keep the original size: lines may run to the paragraph's right edge
+        // and the last one to the image's, before the font shrinks.
+        let right = unit.slices.iter().map(|s| s.rect.right).max().unwrap_or(0) as f32 + size * 0.5;
+        let last = unit.slices.len().saturating_sub(1);
+        let widths: Vec<f32> = unit
+            .slices
+            .iter()
+            .enumerate()
+            .map(|(i, s)| if i == last { image_w as f32 - 4.0 } else { right } - s.rect.left as f32)
+            .collect();
+        let fit = layout::fit(&unit.translation, &widths, size, &mut |t, s| paint::measure(t, s, weight));
+
+        // Baseline of lines the measurement missed: same offset from the box
+        // top as the measured lines.
+        let offset = median(unit.slices.iter().filter_map(|s| s.ink.map(|i| i.baseline - s.rect.top as f32)).collect());
         for (slice, line) in unit.slices.iter().zip(fit.lines) {
             let h = slice.rect.bottom - slice.rect.top;
             // Cover the original glyphs, tone marks included.
             let mut fill = translate::inflate(slice.rect, 2, (h / 5).max(2));
-            let needed = paint::measure(&line, fit.size).ceil() as i32 + 4;
+            let needed = paint::measure(&line, fit.size, weight).ceil() as i32 + 6;
             fill.right = fill.right.max(fill.left + needed);
-            boxes.push(paint::DrawBox { fill, background: slice.background, foreground: slice.foreground, text: line, size: fit.size });
+            let baseline = slice.ink.map(|i| i.baseline).or(offset.map(|o| slice.rect.top as f32 + o));
+            boxes.push(paint::DrawBox {
+                fill,
+                background: slice.background,
+                foreground: slice.foreground,
+                text: line,
+                size: fit.size,
+                weight,
+                baseline,
+            });
         }
     }
     log(format!("showing translation: {:?}", text.join(" / ")));
     app.translation = Some(Shown { boxes, text: text.join("\n") });
     render(app);
+    if app.active {
+        offer_actions(app);
+    }
 }
 
 /// Joins words with spaces, and lines with newlines (for printing results).
@@ -940,7 +1087,7 @@ fn render(app: &App) {
                 pixel(0x26, 0x84, 0xFF, 0x60)
             };
             for r in model.highlight(app.anchor, app.focus) {
-                fill(px, w, h, inflate(r, 0, 2), color);
+                fill_rounded(px, w, h, inflate(r, 1, 2), color);
             }
         }
         if let Some(shown) = &app.translation {
@@ -948,6 +1095,14 @@ fn render(app: &App) {
             if let Err(e) = paint::draw(mem, w, h, &shown.boxes) {
                 log(format!("drawing translation failed: {e}"));
             }
+        }
+        // QC_CAPTURABLE=1: screenshots can see the overlay while it has focus
+        // (selection, translation), for checking how it is drawn. Never while
+        // a translation measures the image, nor while revalidation runs.
+        static CAPTURABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *CAPTURABLE.get_or_init(|| std::env::var_os("QC_CAPTURABLE").is_some()) {
+            let affinity = if app.active && !app.translating { WDA_NONE } else { WDA_EXCLUDEFROMCAPTURE };
+            let _ = SetWindowDisplayAffinity(app.overlay, affinity);
         }
 
         let dst = POINT { x: data.rect.left, y: data.rect.top };
@@ -974,6 +1129,35 @@ fn render(app: &App) {
         let _ = DeleteObject(dib.into());
         let _ = DeleteDC(mem);
         ReleaseDC(None, screen);
+    }
+}
+
+/// Fills `r` with slightly rounded, antialiased corners, blending `color`
+/// (premultiplied) over what is there.
+fn fill_rounded(px: &mut [u32], w: i32, h: i32, r: RECT, color: u32) {
+    let radius = ((r.bottom - r.top) as f32 / 5.0).clamp(2.0, 6.0);
+    let blend = |dst: u32, k: f32| -> u32 {
+        let mut out = 0u32;
+        for shift in [0, 8, 16, 24] {
+            let s = ((color >> shift) & 0xFF) as f32;
+            let d = ((dst >> shift) & 0xFF) as f32;
+            out |= ((s * k + d * (1.0 - k)).round() as u32).min(255) << shift;
+        }
+        out
+    };
+    for y in r.top.max(0)..r.bottom.min(h) {
+        for x in r.left.max(0)..r.right.min(w) {
+            // Distance into the corner square, measured from the pixel center.
+            let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+            let cx = if fx < r.left as f32 + radius { r.left as f32 + radius } else if fx > r.right as f32 - radius { r.right as f32 - radius } else { fx };
+            let cy = if fy < r.top as f32 + radius { r.top as f32 + radius } else if fy > r.bottom as f32 - radius { r.bottom as f32 - radius } else { fy };
+            let dist = ((fx - cx).powi(2) + (fy - cy).powi(2)).sqrt();
+            let k = (radius - dist + 0.5).clamp(0.0, 1.0);
+            if k > 0.0 {
+                let i = (y * w + x) as usize;
+                px[i] = blend(px[i], k);
+            }
+        }
     }
 }
 

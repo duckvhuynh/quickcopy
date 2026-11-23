@@ -182,6 +182,18 @@ impl TextModel {
         self.chars[a.min(b)..a.max(b).min(self.len())].iter().map(|c| c.c).collect()
     }
 
+    /// The selection [a, b) line by line: each line's highlight box and the
+    /// selected text on it.
+    pub fn selected_lines(&self, a: usize, b: usize) -> Vec<(RECT, String)> {
+        let (a, b) = (a.min(b), a.max(b));
+        let boxes = self.highlight(a, b);
+        let texts = self
+            .lines
+            .iter()
+            .filter_map(|&(s, e)| (a.max(s) < b.min(e)).then(|| self.text(a.max(s), b.min(e))));
+        boxes.into_iter().zip(texts).collect()
+    }
+
     /// Highlight boxes for the selection [a, b): one per line it touches.
     pub fn highlight(&self, a: usize, b: usize) -> Vec<RECT> {
         let (a, b) = (a.min(b), a.max(b));
