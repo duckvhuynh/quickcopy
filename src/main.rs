@@ -740,8 +740,9 @@ fn pixel(r: u32, g: u32, b: u32, a: u32) -> u32 {
     (a << 24) | ((r * a / 255) << 16) | ((g * a / 255) << 8) | (b * a / 255)
 }
 
-/// Redraws the overlay. Text lines get alpha 1 (invisible but clickable);
-/// everything else has alpha 0, so clicks there fall through to the app below.
+/// Redraws the overlay. Text paragraphs and a wide margin around them get
+/// alpha 1 (invisible but clickable, see `textmodel::grab_areas`); the rest
+/// has alpha 0, so clicks there fall through to the app below.
 fn render(app: &App) {
     let Some(data) = &app.data else { return };
     let w = data.rect.right - data.rect.left;
@@ -771,8 +772,8 @@ fn render(app: &App) {
         px.fill(0);
 
         let hit = pixel(0, 0, 0, 1);
-        for line in &data.lines {
-            fill(px, w, h, hit_area(*line), hit);
+        for area in textmodel::grab_areas(&data.lines) {
+            fill(px, w, h, area, hit);
         }
         if let (Some(model), true) = (&app.model, app.has_selection()) {
             let color = if app.flashing { pixel(0x22, 0xC5, 0x5E, 0x70) } else { pixel(0x26, 0x84, 0xFF, 0x60) };
@@ -822,15 +823,6 @@ fn fill(px: &mut [u32], w: i32, h: i32, r: RECT, color: u32) {
 
 fn contains(r: RECT, p: POINT) -> bool {
     p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom
-}
-
-/// Where a line accepts the mouse. People start a drag a little before the
-/// first word or past the last one, so the line reaches well beyond its text
-/// sideways (twice its height, at least 24 px) and a little above and below.
-/// Points there put the caret at the line's start or end (`TextModel::hit`).
-fn hit_area(line: RECT) -> RECT {
-    let h = line.bottom - line.top;
-    inflate(line, (2 * h).max(24), (h / 4).max(3))
 }
 
 fn inflate(r: RECT, dx: i32, dy: i32) -> RECT {

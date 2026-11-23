@@ -198,9 +198,71 @@ impl TextModel {
     }
 }
 
+/// Where the overlay takes the mouse: each paragraph's box grown by a wide
+/// margin (3 line heights sideways, 1.5 above and below). People start a drag
+/// above and left of a paragraph, end it below and right of it, or press
+/// between lines; those presses must start a selection, not drag the image.
+/// Lines close together (gap up to 1.5 line heights, overlapping sideways)
+/// form one paragraph; a far-off caption keeps its own smaller area, so the
+/// rest of the image still gets the app's own clicks and drags.
+pub fn grab_areas(lines: &[RECT]) -> Vec<RECT> {
+    let mut sorted: Vec<RECT> = lines.iter().copied().filter(|r| r.right > r.left && r.bottom > r.top).collect();
+    sorted.sort_by_key(|r| r.top);
+    // (paragraph box, tallest line in it)
+    let mut blocks: Vec<(RECT, i32)> = Vec::new();
+    for r in sorted {
+        let h = r.bottom - r.top;
+        let near = blocks.iter_mut().find(|(b, bh)| {
+            let lh = h.max(*bh);
+            let gap = r.top - b.bottom;
+            gap <= lh * 3 / 2 && r.bottom >= b.top && r.left <= b.right + 2 * lh && r.right >= b.left - 2 * lh
+        });
+        match near {
+            Some((b, bh)) => {
+                *b = RECT {
+                    left: b.left.min(r.left),
+                    top: b.top.min(r.top),
+                    right: b.right.max(r.right),
+                    bottom: b.bottom.max(r.bottom),
+                };
+                *bh = (*bh).max(h);
+            }
+            None => blocks.push((r, h)),
+        }
+    }
+    blocks
+        .into_iter()
+        .map(|(b, h)| {
+            let (dx, dy) = ((3 * h).max(32), (3 * h / 2).max(16));
+            RECT { left: b.left - dx, top: b.top - dy, right: b.right + dx, bottom: b.bottom + dy }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rect(l: i32, t: i32, r: i32, b: i32) -> RECT {
+        RECT { left: l, top: t, right: r, bottom: b }
+    }
+
+    #[test]
+    fn paragraph_lines_share_one_wide_area() {
+        // Three 20 px lines, 16 px apart: one paragraph.
+        let lines = [rect(100, 100, 500, 120), rect(100, 136, 480, 156), rect(100, 172, 300, 192)];
+        let areas = grab_areas(&lines);
+        assert_eq!(areas, vec![rect(40, 70, 560, 222)]);
+    }
+
+    #[test]
+    fn distant_caption_keeps_its_own_area() {
+        let lines = [rect(100, 100, 500, 120), rect(100, 136, 480, 156), rect(600, 700, 700, 716)];
+        let areas = grab_areas(&lines);
+        assert_eq!(areas.len(), 2);
+        // 16 px line: 48 px sideways, 24 px above and below.
+        assert_eq!(areas[1], rect(552, 676, 748, 740));
+    }
 
     fn word(text: &str, line: usize, left: i32, right: i32) -> Word {
         let top = line as i32 * 40;
