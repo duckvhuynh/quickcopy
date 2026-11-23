@@ -206,37 +206,52 @@ impl TextModel {
 /// form one paragraph; a far-off caption keeps its own smaller area, so the
 /// rest of the image still gets the app's own clicks and drags.
 pub fn grab_areas(lines: &[RECT]) -> Vec<RECT> {
-    let mut sorted: Vec<RECT> = lines.iter().copied().filter(|r| r.right > r.left && r.bottom > r.top).collect();
-    sorted.sort_by_key(|r| r.top);
-    // (paragraph box, tallest line in it)
-    let mut blocks: Vec<(RECT, i32)> = Vec::new();
-    for r in sorted {
-        let h = r.bottom - r.top;
-        let near = blocks.iter_mut().find(|(b, bh)| {
-            let lh = h.max(*bh);
-            let gap = r.top - b.bottom;
-            gap <= lh * 3 / 2 && r.bottom >= b.top && r.left <= b.right + 2 * lh && r.right >= b.left - 2 * lh
-        });
-        match near {
-            Some((b, bh)) => {
-                *b = RECT {
-                    left: b.left.min(r.left),
-                    top: b.top.min(r.top),
-                    right: b.right.max(r.right),
-                    bottom: b.bottom.max(r.bottom),
-                };
-                *bh = (*bh).max(h);
-            }
-            None => blocks.push((r, h)),
-        }
-    }
-    blocks
+    paragraphs(lines)
         .into_iter()
-        .map(|(b, h)| {
+        .map(|p| {
+            let (b, h) = (p.rect, p.line_height);
             let (dx, dy) = ((3 * h).max(32), (3 * h / 2).max(16));
             RECT { left: b.left - dx, top: b.top - dy, right: b.right + dx, bottom: b.bottom + dy }
         })
         .collect()
+}
+
+pub struct Paragraph {
+    /// Indices into the `lines` given to `paragraphs`, top to bottom.
+    pub lines: Vec<usize>,
+    pub rect: RECT,
+    /// Tallest line.
+    pub line_height: i32,
+}
+
+/// Groups lines into paragraphs: lines close together (gap up to 1.5 line
+/// heights) that overlap sideways (within 2 line heights).
+pub fn paragraphs(lines: &[RECT]) -> Vec<Paragraph> {
+    let mut order: Vec<usize> = (0..lines.len()).filter(|&i| lines[i].right > lines[i].left && lines[i].bottom > lines[i].top).collect();
+    order.sort_by_key(|&i| lines[i].top);
+    let mut out: Vec<Paragraph> = Vec::new();
+    for i in order {
+        let r = lines[i];
+        let h = r.bottom - r.top;
+        let near = out.iter_mut().find(|p| {
+            let (b, lh) = (p.rect, h.max(p.line_height));
+            r.top - b.bottom <= lh * 3 / 2 && r.bottom >= b.top && r.left <= b.right + 2 * lh && r.right >= b.left - 2 * lh
+        });
+        match near {
+            Some(p) => {
+                p.rect = RECT {
+                    left: p.rect.left.min(r.left),
+                    top: p.rect.top.min(r.top),
+                    right: p.rect.right.max(r.right),
+                    bottom: p.rect.bottom.max(r.bottom),
+                };
+                p.line_height = p.line_height.max(h);
+                p.lines.push(i);
+            }
+            None => out.push(Paragraph { lines: vec![i], rect: r, line_height: h }),
+        }
+    }
+    out
 }
 
 #[cfg(test)]

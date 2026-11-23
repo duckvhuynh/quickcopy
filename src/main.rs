@@ -9,8 +9,11 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod layout;
+mod paint;
 mod rectfind;
 mod textmodel;
+mod translate;
 mod viet;
 mod worker;
 
@@ -34,6 +37,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 
 use textmodel::TextModel;
+use translate::{Translated, Unit, WM_APP_TRANSLATED};
 use worker::{OcrData, Request, WM_APP_HIDE, WM_APP_SHOW, WM_APP_UPDATE, Word, log};
 
 const WM_APP_TRAY: u32 = WM_APP + 10;
@@ -56,6 +60,17 @@ const MENU_QUIT: usize = 101;
 const MENU_VIETNAMESE: usize = 102;
 const MENU_COPY: usize = 200;
 const MENU_SELECT_ALL: usize = 201;
+const MENU_TRANSLATE: usize = 202;
+const MENU_ORIGINAL: usize = 203;
+/// Language translations are made into (English when the text already is).
+const TARGET_LANGUAGE: &str = "vi";
+
+/// A translation painted over the image, like Google Lens.
+struct Shown {
+    boxes: Vec<paint::DrawBox>,
+    /// The whole translation, for copying.
+    text: String,
+}
 
 struct App {
     main: HWND,
@@ -82,6 +97,9 @@ struct App {
     pending_copy: bool,
     flashing: bool,
     last_dblclk: Option<(Instant, POINT)>,
+    /// A translation request is out.
+    translating: bool,
+    translation: Option<Shown>,
 }
 
 impl App {
@@ -171,8 +189,12 @@ fn main() -> Result<()> {
             Some(instance),
             None,
         )?;
-        // Keep our own overlay out of screen captures so revalidation hashes stay stable.
-        let _ = SetWindowDisplayAffinity(overlay, WDA_EXCLUDEFROMCAPTURE);
+        // Keep our own overlay out of screen captures so revalidation hashes
+        // stay stable. QC_CAPTURABLE=1 leaves it visible to screenshots, for
+        // checking what the overlay draws.
+        if std::env::var_os("QC_CAPTURABLE").is_none() {
+            let _ = SetWindowDisplayAffinity(overlay, WDA_EXCLUDEFROMCAPTURE);
+        }
 
         let (tx, rx) = channel();
         let main_raw = main.0 as isize;
@@ -200,6 +222,8 @@ fn main() -> Result<()> {
                 pending_copy: false,
                 flashing: false,
                 last_dblclk: None,
+                translating: false,
+                translation: None,
             })
         });
 
@@ -244,6 +268,11 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         WM_APP_UPDATE => {
             let data = unsafe { *Box::from_raw(lp.0 as *mut OcrData) };
             with_app(|app| apply_update(app, data));
+            LRESULT(0)
+        }
+        WM_APP_TRANSLATED => {
+            let translated = unsafe { *Box::from_raw(lp.0 as *mut Translated) };
+            with_app(|app| apply_translation(app, translated));
             LRESULT(0)
         }
         WM_APP_HIDE => {
@@ -354,6 +383,8 @@ fn show(app: &mut App, data: OcrData) {
     app.anchor = 0;
     app.focus = 0;
     app.dragging = false;
+    app.translating = false;
+    app.translation = None;
     app.last_revalidate = Instant::now();
     render(app);
     unsafe {
@@ -385,6 +416,8 @@ fn hide(app: &mut App) {
     app.pending_copy = false;
     app.dragging = false;
     app.flashing = false;
+    app.translating = false;
+    app.translation = None;
 }
 
 /// The Vietnamese reading arrived for the image on screen: swap the words in,
@@ -542,6 +575,8 @@ fn on_button_down(app: &mut App, pt: POINT) {
         return;
     }
     activate(app);
+    // A new selection starts from the original text.
+    app.translation = None;
     let Some(model) = &app.model else { return };
     let at = model.hit(pt);
 
@@ -645,6 +680,16 @@ fn on_key(app: &mut App, vk: u16) -> bool {
             copy_selection(app);
             true
         }
+        VK_T if ctrl => {
+            start_translation(app);
+            true
+        }
+        // Esc first puts the original text back, then dismisses.
+        VK_ESCAPE if app.translation.is_some() => {
+            app.translation = None;
+            render(app);
+            true
+        }
         VK_ESCAPE => {
             hide(app);
             let _ = app.tx.send(Request::Forget);
@@ -671,6 +716,14 @@ fn select_all(app: &mut App) {
 }
 
 fn copy_selection(app: &mut App) {
+    if let Some(shown) = &app.translation {
+        let text = shown.text.clone();
+        match set_clipboard(app.main, &text) {
+            Ok(()) => log(format!("copied translation: {text:?}")),
+            Err(e) => log(format!("clipboard error: {e}")),
+        }
+        return;
+    }
     let (Some(data), Some(model)) = (&app.data, &app.model) else { return };
     if !app.has_selection() {
         return;
@@ -696,10 +749,17 @@ fn copy_selection(app: &mut App) {
 /// Right-click menu for a selection. Runs a modal loop, so it must not hold
 /// the app borrow.
 unsafe fn selection_menu(overlay: HWND) {
+    let translated = with_app(|app| app.translation.is_some()).unwrap_or(false);
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
-        let _ = AppendMenuW(menu, MF_STRING, MENU_COPY, w!("Sao chép\tCtrl+C"));
-        let _ = AppendMenuW(menu, MF_STRING, MENU_SELECT_ALL, w!("Chọn tất cả\tCtrl+A"));
+        if translated {
+            let _ = AppendMenuW(menu, MF_STRING, MENU_COPY, w!("Sao chép bản dịch\tCtrl+C"));
+            let _ = AppendMenuW(menu, MF_STRING, MENU_ORIGINAL, w!("Hiện bản gốc\tEsc"));
+        } else {
+            let _ = AppendMenuW(menu, MF_STRING, MENU_COPY, w!("Sao chép\tCtrl+C"));
+            let _ = AppendMenuW(menu, MF_STRING, MENU_TRANSLATE, w!("Dịch sang Tiếng Việt\tCtrl+T"));
+            let _ = AppendMenuW(menu, MF_STRING, MENU_SELECT_ALL, w!("Chọn tất cả\tCtrl+A"));
+        }
         let mut pt = POINT::default();
         let _ = GetCursorPos(&mut pt);
         let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, None, overlay, None);
@@ -711,9 +771,104 @@ unsafe fn selection_menu(overlay: HWND) {
             MENU_SELECT_ALL => {
                 with_app(select_all);
             }
+            MENU_TRANSLATE => {
+                with_app(start_translation);
+            }
+            MENU_ORIGINAL => {
+                with_app(|app| {
+                    app.translation = None;
+                    render(app);
+                });
+            }
             _ => {}
         }
     }
+}
+
+/// Sends the selection off for translation, one request per paragraph so
+/// sentences that wrap across lines are translated whole.
+fn start_translation(app: &mut App) {
+    if !app.has_selection() || app.translating || app.translation.is_some() {
+        return;
+    }
+    let (Some(data), Some(model)) = (&app.data, &app.model) else { return };
+    let (lo, hi) = (app.anchor.min(app.focus), app.anchor.max(app.focus));
+    let mut units = Vec::new();
+    for p in textmodel::paragraphs(&model.line_rects) {
+        let (Some(&first), Some(&last)) = (p.lines.iter().min(), p.lines.iter().max()) else { continue };
+        let (a, b) = (lo.max(model.lines[first].0), hi.min(model.lines[last].1));
+        if a >= b {
+            continue;
+        }
+        let text = model.text(a, b).replace('\n', " ");
+        if text.trim().is_empty() {
+            continue;
+        }
+        units.push(Unit { text: text.trim().to_string(), slices: model.highlight(a, b) });
+    }
+    if units.is_empty() {
+        return;
+    }
+    units.sort_by_key(|u| u.slices.first().map_or(0, |r| r.top));
+    // Widely spaced lines can land in separate paragraphs; a sentence that
+    // runs on (no closing punctuation) into the text right below is one unit.
+    let mut merged: Vec<Unit> = Vec::new();
+    for unit in units {
+        if let (Some(prev), Some(first)) = (merged.last_mut(), unit.slices.first()) {
+            let last = prev.slices.last().copied().unwrap_or_default();
+            let h = last.bottom - last.top;
+            let ends = prev.text.trim_end().ends_with(['.', '!', '?', ':', ';', '…']);
+            if !ends && first.top - last.bottom <= 2 * h {
+                prev.text = format!("{} {}", prev.text, unit.text);
+                prev.slices.extend(unit.slices);
+                continue;
+            }
+        }
+        merged.push(unit);
+    }
+    let units = merged;
+    log(format!("translating {} paragraph(s)", units.len()));
+    app.translating = true;
+    render(app);
+    translate::spawn(app.main, data.id, data.rect, TARGET_LANGUAGE, units);
+}
+
+/// A translation came back: wrap it into the selected line boxes, shrinking
+/// the font where it runs longer than the original, and paint it.
+fn apply_translation(app: &mut App, translated: Translated) {
+    app.translating = false;
+    if app.data.as_ref().is_none_or(|d| d.id != translated.id) {
+        return;
+    }
+    let units = match translated.result {
+        Ok(units) => units,
+        Err(e) => {
+            log(format!("translation failed: {e}"));
+            render(app);
+            return;
+        }
+    };
+    let mut boxes = Vec::new();
+    let mut text = Vec::new();
+    for unit in &units {
+        text.push(unit.translation.clone());
+        let mut heights: Vec<i32> = unit.slices.iter().map(|s| s.rect.bottom - s.rect.top).collect();
+        heights.sort_unstable();
+        let line_h = heights.get(heights.len() / 2).copied().unwrap_or(16) as f32;
+        let widths: Vec<f32> = unit.slices.iter().map(|s| (s.rect.right - s.rect.left) as f32 + line_h * 0.3).collect();
+        let fit = layout::fit(&unit.translation, &widths, line_h * 0.9, &mut paint::measure);
+        for (slice, line) in unit.slices.iter().zip(fit.lines) {
+            let h = slice.rect.bottom - slice.rect.top;
+            // Cover the original glyphs, tone marks included.
+            let mut fill = translate::inflate(slice.rect, 2, (h / 5).max(2));
+            let needed = paint::measure(&line, fit.size).ceil() as i32 + 4;
+            fill.right = fill.right.max(fill.left + needed);
+            boxes.push(paint::DrawBox { fill, background: slice.background, foreground: slice.foreground, text: line, size: fit.size });
+        }
+    }
+    log(format!("showing translation: {:?}", text.join(" / ")));
+    app.translation = Some(Shown { boxes, text: text.join("\n") });
+    render(app);
 }
 
 /// Joins words with spaces, and lines with newlines (for printing results).
@@ -768,6 +923,7 @@ fn render(app: &App) {
             ReleaseDC(None, screen);
             return;
         };
+        let old = SelectObject(mem, dib.into());
         let px = std::slice::from_raw_parts_mut(bits as *mut u32, (w * h) as usize);
         px.fill(0);
 
@@ -775,14 +931,25 @@ fn render(app: &App) {
         for area in textmodel::grab_areas(&data.lines) {
             fill(px, w, h, area, hit);
         }
-        if let (Some(model), true) = (&app.model, app.has_selection()) {
-            let color = if app.flashing { pixel(0x22, 0xC5, 0x5E, 0x70) } else { pixel(0x26, 0x84, 0xFF, 0x60) };
+        if let (Some(model), true, None) = (&app.model, app.has_selection(), &app.translation) {
+            let color = if app.flashing {
+                pixel(0x22, 0xC5, 0x5E, 0x70) // copied
+            } else if app.translating {
+                pixel(0xF5, 0x9E, 0x0B, 0x60) // waiting for the translation
+            } else {
+                pixel(0x26, 0x84, 0xFF, 0x60)
+            };
             for r in model.highlight(app.anchor, app.focus) {
                 fill(px, w, h, inflate(r, 0, 2), color);
             }
         }
+        if let Some(shown) = &app.translation {
+            let _ = GdiFlush();
+            if let Err(e) = paint::draw(mem, w, h, &shown.boxes) {
+                log(format!("drawing translation failed: {e}"));
+            }
+        }
 
-        let old = SelectObject(mem, dib.into());
         let dst = POINT { x: data.rect.left, y: data.rect.top };
         let size = SIZE { cx: w, cy: h };
         let src = POINT::default();

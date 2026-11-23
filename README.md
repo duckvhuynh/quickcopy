@@ -11,6 +11,15 @@ Shift+arrows, Ctrl+Shift+arrows by word, Shift+Home/End, Ctrl+A. The
 selection stays until you click elsewhere or press Esc; other keys go back
 to the app underneath.
 
+**Translate** (Ctrl+T or right-click > Dịch sang Tiếng Việt): the selected
+text is translated with Google Translate and painted over the original in
+the same boxes, with sampled background and text colors, like Google Lens.
+Text already in Vietnamese is translated to English. Ctrl+C copies the
+translation; Esc shows the original again. This sends the selected text to
+Google, only when you ask. It uses the endpoint and public key of the Google
+Translate web client (not an official API; it may change). Set
+`QC_GOOGLE_KEY` to use your own key.
+
 - ~330 KB executable, no GPU, ~3 MB RAM idle (~90 MB while the Vietnamese
   model is loaded; it unloads after 5 idle minutes).
 - Rust + Win32, no UI framework. Runs in the tray (Pause, Vietnamese toggle, Quit).

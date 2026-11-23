@@ -762,7 +762,7 @@ pub fn line_rects(words: &[Word]) -> Vec<RECT> {
 
 /// Copies screen pixels of `r` into a top-down BGRA buffer of `out_w` x `out_h`
 /// (scaled with HALFTONE when the sizes differ). Alpha is forced to 255.
-fn capture(r: RECT, out_w: i32, out_h: i32) -> Result<Vec<u8>> {
+pub fn capture(r: RECT, out_w: i32, out_h: i32) -> Result<Vec<u8>> {
     let w = r.right - r.left;
     let h = r.bottom - r.top;
     unsafe {
