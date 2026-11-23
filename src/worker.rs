@@ -22,6 +22,7 @@ use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 
+use crate::video::Media;
 use crate::viet;
 
 pub const WM_APP_SHOW: u32 = WM_APP + 1; // lparam = Box<OcrData>
@@ -29,6 +30,12 @@ pub const WM_APP_HIDE: u32 = WM_APP + 2;
 pub const WM_APP_UPDATE: u32 = WM_APP + 3; // lparam = Box<OcrData>
 /// A video under the cursor is playing (lparam = Box<RECT>, its screen rect).
 pub const WM_APP_PLAYING: u32 = WM_APP + 5;
+/// Checks in a row (`REVALIDATE` apart, in main) that must see a shown
+/// video's picture move before it counts as playing again.
+const PLAYING_CHECKS: u8 = 3;
+/// Smallest picture an app draws itself that is read (smaller ones are icons).
+const SURFACE_MIN_W: i32 = 100;
+const SURFACE_MIN_H: i32 = 60;
 /// Two captures this far apart tell a playing video from a paused one (a
 /// frame lasts 17-42 ms at 24-60 fps).
 const VIDEO_FRAME: Duration = Duration::from_millis(150);
@@ -101,9 +108,15 @@ struct Current {
     clip: RECT,
     /// Coarse look of the image when it was read (see `grid`).
     grid: Vec<[u8; 3]>,
-    /// For a paused video: the window it plays in, to notice it playing
-    /// again when its picture does not move (`video::Sessions`).
-    video_window: Option<HWND>,
+    /// For a paused video: its media session, to notice it playing again
+    /// when its picture does not move.
+    media: Option<Media>,
+    /// A picture that may be a video: playing again shows as motion, which
+    /// a small part of the picture (a moving caption) is enough for.
+    may_play: bool,
+    /// The look at the last check, and how many checks in a row saw motion.
+    last_grid: Vec<[u8; 3]>,
+    moving: u8,
 }
 
 /// What `detect` found under a point.
@@ -201,8 +214,10 @@ impl Detector {
         }
         // A <video> is a group like any <div>; the tag says which.
         let video = if control_type == UIA_GroupControlTypeId { crate::video::video_at(pt) } else { None };
-        let is_video = video.is_some();
-        let (clip, tracked) = if control_type == UIA_ImageControlTypeId || is_video {
+        let mut media = video.map(|_| Media::Tab(unsafe { GetAncestor(WindowFromPoint(pt), GA_ROOT) }));
+        // Pictures that may be a video: read once they stop moving.
+        let mut may_play = media.is_some();
+        let (clip, tracked) = if control_type == UIA_ImageControlTypeId || video.is_some() {
             let element_rect = unsafe { element.CurrentBoundingRectangle()? };
             // The element UI Automation found may be a box around the video:
             // the video's own rect is what gets read; the element is kept to
@@ -225,6 +240,17 @@ impl Detector {
                 return Ok(Found::Nothing);
             };
             (clip, None)
+        } else if let Some(surface) = self.surface(&element, control_type)? {
+            // A picture the app draws itself (an image viewer's canvas, a
+            // video player's video). Without a media session it may still be
+            // a video (VLC has none): its moving picture tells.
+            media = surface;
+            may_play = true;
+            let element_rect = unsafe { element.CurrentBoundingRectangle()? };
+            let Some(clip) = visible_rect(pt, element_rect) else {
+                return Ok(Found::Nothing);
+            };
+            (clip, Some((element.clone(), element_rect)))
         } else {
             if cfg!(debug_assertions) {
                 let class = unsafe { element.CurrentClassName() }.map(|s| s.to_string()).unwrap_or_default();
@@ -237,9 +263,9 @@ impl Detector {
         // The same pixels read differently in Vietnamese mode.
         let mode = if VIETNAMESE.load(Ordering::Relaxed) { 0x9E37_79B9_7F4A_7C15 } else { 0 };
         let mut pixels = capture(clip, w, h)?;
-        let video_window = is_video.then(|| unsafe { GetAncestor(WindowFromPoint(pt), GA_ROOT) });
-        if let Some(window) = video_window {
-            match self.paused_frame(clip, window, &pixels)? {
+        let is_video = media.is_some();
+        if may_play {
+            match self.paused_frame(clip, media, &pixels)? {
                 Some(frame) => pixels = frame,
                 None => return Ok(Found::PlayingVideo(clip)),
             }
@@ -256,7 +282,8 @@ impl Detector {
             (hash, pixels) = settled;
         }
         let key = hash ^ mode;
-        let current = Current { element: tracked, clip, grid: grid(&pixels, w, h), video_window };
+        let look = grid(&pixels, w, h);
+        let current = Current { element: tracked, clip, last_grid: look.clone(), grid: look, media, may_play, moving: 0 };
         let t_found = t0.elapsed();
 
         if let Some(words) = self.cache.get(&key) {
@@ -271,9 +298,9 @@ impl Detector {
         let (pixels, sw, sh, scale) = self.scaled_for_ocr(clip, pixels)?;
         let t_scaled = t0.elapsed();
         let mut lines = self.windows_lines(&pixels, sw, sh)?;
-        if is_video {
-            let rows = self.player_rows(&element, clip);
-            lines = in_picture(lines, clip, scale, &rows);
+        if may_play {
+            let controls = self.player_controls(&element, clip);
+            lines = in_picture(lines, clip, scale, &controls);
         }
         let first = to_words(&lines, scale);
         log(format!(
@@ -311,10 +338,10 @@ impl Detector {
     }
 
     /// The frame of a video that is paused, or `None` while it plays: its
-    /// window's media session says so, or its picture changes between two
-    /// captures. `first` is a capture of `clip` just taken.
-    fn paused_frame(&self, clip: RECT, window: HWND, first: &[u8]) -> Result<Option<Vec<u8>>> {
-        if self.sessions.playing_in(&crate::video::window_title(window)) {
+    /// media session (if it has one) says so, or its picture changes between
+    /// two captures. `first` is a capture of `clip` just taken.
+    fn paused_frame(&self, clip: RECT, media: Option<Media>, first: &[u8]) -> Result<Option<Vec<u8>>> {
+        if media.is_some_and(|m| self.sessions.playing(m)) {
             log("video playing (media session)".into());
             return Ok(None);
         }
@@ -328,14 +355,53 @@ impl Detector {
         Ok(Some(second))
     }
 
-    /// The rows of the screen (top, bottom) where a video's player shows its
-    /// own controls and text over the picture: buttons, the seek bar and the
-    /// time beside them, a title, captions. They are the named elements
-    /// inside the player (the highest element around `element` that is the
-    /// video's size), except panels as tall as a third of the video.
-    fn player_rows(&self, element: &IUIAutomationElement, video: RECT) -> Vec<(i32, i32)> {
+    /// A picture an app draws in its own control, which UI Automation shows
+    /// as an unnamed custom element, pane or group with nothing inside: an
+    /// image viewer's canvas (Photos), a player's video area. Also the
+    /// child window a media player draws its video in (Media Player's
+    /// `CoreWindow`), when the app has a media session. Returns the video's
+    /// media session (`Some(Some(_))` for a media player).
+    ///
+    /// Left alone: web pages (their images and videos are found as such,
+    /// and a <div> is unnamed and empty too), named canvases (Paint's is
+    /// "Using Brush tool on Canvas": an editor, whose clicks must stay its
+    /// own), top-level windows (games), and small elements (icons).
+    fn surface(&self, element: &IUIAutomationElement, control_type: UIA_CONTROLTYPE_ID) -> Result<Option<Option<Media>>> {
+        unsafe {
+            let framework = element.CurrentFrameworkId()?.to_string();
+            if framework == "Chrome" || framework == "Gecko" {
+                return Ok(None);
+            }
+            let r = element.CurrentBoundingRectangle()?;
+            if r.right - r.left < SURFACE_MIN_W || r.bottom - r.top < SURFACE_MIN_H {
+                return Ok(None);
+            }
+            let pid = element.CurrentProcessId()? as u32;
+            let media = self.sessions.has_app(pid).then_some(Media::App(pid));
+            let walker = self.uia.RawViewWalker()?;
+            let surface = if control_type == UIA_WindowControlTypeId {
+                let top_level = walker.GetParentElement(element).and_then(|p| self.uia.CompareElements(&p, &self.uia.GetRootElement()?)).is_ok_and(|b| b.as_bool());
+                media.is_some() && !top_level
+            } else if [UIA_CustomControlTypeId, UIA_PaneControlTypeId, UIA_GroupControlTypeId].contains(&control_type) {
+                element.CurrentName()?.is_empty() && walker.GetFirstChildElement(element).is_err()
+            } else {
+                false
+            };
+            if surface {
+                log(format!("surface: {} {:?} of {framework:?}, media session: {}", control_type.0, element.CurrentAutomationId()?.to_string(), media.is_some()));
+            }
+            Ok(surface.then_some(media))
+        }
+    }
+
+    /// Where a video's player shows its own controls and text over the
+    /// picture (screen rects): buttons, the seek bar, a title, captions. They
+    /// are the named elements inside the player (the highest element around
+    /// `element` that is the video's size), except panels as tall as a third
+    /// of the video.
+    fn player_controls(&self, element: &IUIAutomationElement, video: RECT) -> Vec<RECT> {
         let close = |r: RECT| (r.left - video.left).abs() <= 2 && (r.top - video.top).abs() <= 2 && (r.right - video.right).abs() <= 2 && (r.bottom - video.bottom).abs() <= 2;
-        let rows = || -> Result<Vec<(i32, i32)>> {
+        let rows = || -> Result<Vec<RECT>> {
             unsafe {
                 let walker = self.uia.RawViewWalker()?;
                 let mut player = element.clone();
@@ -355,7 +421,7 @@ impl Detector {
                     let visible = r.right > r.left && r.bottom > r.top && !e.CurrentIsOffscreen()?.as_bool();
                     let inside = r.left < video.right && r.right > video.left && r.top < video.bottom && r.bottom > video.top;
                     if visible && inside && (r.bottom - r.top) * 3 < video.bottom - video.top {
-                        rows.push((r.top, r.bottom));
+                        rows.push(r);
                     }
                 }
                 Ok(rows)
@@ -496,9 +562,9 @@ impl Detector {
 
     /// True if the image the overlay covers is still where it was and unchanged
     /// (and, for a video, still paused).
-    fn still_valid(&self, cur: &Current) -> bool {
-        if let Some(window) = cur.video_window {
-            if self.sessions.playing_in(&crate::video::window_title(window)) {
+    fn still_valid(&self, cur: &mut Current) -> bool {
+        if let Some(media) = cur.media {
+            if self.sessions.playing(media) {
                 log("revalidate: video playing".into());
                 return false;
             }
@@ -519,12 +585,25 @@ impl Detector {
         let h = cur.clip.bottom - cur.clip.top;
         let Ok(px) = capture(cur.clip, w, h) else { return false };
         let now = grid(&px, w, h);
-        let changed = now.iter().zip(&cur.grid).filter(|(a, b)| (0..3).map(|i| (a[i] as i32 - b[i] as i32).abs()).sum::<i32>() > 24).count();
+        let differ = |a: &[u8; 3], b: &[u8; 3]| (0..3).map(|i| (a[i] as i32 - b[i] as i32).abs()).sum::<i32>() > 24;
+        let changed = now.iter().zip(&cur.grid).filter(|(a, b)| differ(a, b)).count();
         let same = changed * 100 <= cur.grid.len() * 15;
         if !same {
             log(format!("revalidate: image changed ({changed}/{} blocks)", cur.grid.len()));
+            return false;
         }
-        same
+        // A video playing again: its picture keeps moving, check after check
+        // (a control fading in moves it once).
+        if cur.may_play {
+            let moved = now.iter().zip(&cur.last_grid).any(|(a, b)| differ(a, b));
+            cur.moving = if moved { cur.moving + 1 } else { 0 };
+            cur.last_grid = now;
+            if cur.moving >= PLAYING_CHECKS {
+                log("revalidate: video playing (picture moves)".into());
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -640,7 +719,7 @@ pub fn run(rx: Receiver<Request>, hwnd: isize) {
                 }
             }
         } else if revalidate {
-            if let Some(cur) = &current {
+            if let Some(cur) = &mut current {
                 if !detector.still_valid(cur) {
                     current = None;
                     unsafe {
@@ -662,8 +741,15 @@ pub fn print_uia(pt: POINT) -> Result<()> {
         let walker = uia.RawViewWalker()?;
         println!("IAccessible2 attributes: {:?}", crate::video::attributes_at(pt));
         let window = GetAncestor(WindowFromPoint(pt), GA_ROOT);
-        let title = crate::video::window_title(window);
-        println!("window title {title:?}, its media playing: {}", crate::video::Sessions::default().playing_in(&title));
+        let sessions = crate::video::Sessions::default();
+        let pid = uia.ElementFromPoint(pt)?.CurrentProcessId()? as u32;
+        println!(
+            "window title {:?}: tab media playing {}; app has a media session {}, playing {}",
+            crate::video::window_title(window),
+            sessions.playing(Media::Tab(window)),
+            sessions.has_app(pid),
+            sessions.playing(Media::App(pid)),
+        );
         let mut element = Some(uia.ElementFromPoint(pt)?);
         for depth in 0..6 {
             let Some(e) = element else { break };
@@ -879,22 +965,45 @@ fn join_rows(lines: Vec<Vec<(Box4, String)>>) -> Vec<Vec<(Box4, String)>> {
     out
 }
 
-/// The lines that are part of a video's picture. Players draw their own
-/// controls, time, title and captions over the video as page text; lines on
-/// the rows they occupy (`player_rows`) are dropped, so the overlay never
-/// takes the player's clicks and the page's own text stays the page's.
-fn in_picture(lines: Vec<Vec<(Box4, String)>>, clip: RECT, scale: f32, rows: &[(i32, i32)]) -> Vec<Vec<(Box4, String)>> {
-    let before = lines.len();
+/// The lines and words that are part of a video's picture. Players draw
+/// their own controls, time, title and captions over the video as page or
+/// app text, which is left out, so the overlay never takes the player's
+/// clicks:
+/// - lines on a control bar (a row with two or more of `controls`) between
+///   its ends: the time shown between the buttons has no element of its own;
+/// - words under any other control (a big play button in the middle, a
+///   caption, an ad's card), keeping the rest of their line.
+fn in_picture(lines: Vec<Vec<(Box4, String)>>, clip: RECT, scale: f32, controls: &[RECT]) -> Vec<Vec<(Box4, String)>> {
+    let to_screen = |b: &Box4| RECT {
+        left: clip.left + (b.0 / scale) as i32,
+        top: clip.top + (b.1 / scale) as i32,
+        right: clip.left + (b.2 / scale).ceil() as i32,
+        bottom: clip.top + (b.3 / scale).ceil() as i32,
+    };
+    let (before_lines, before_words) = (lines.len(), lines.iter().map(Vec::len).sum::<usize>());
     let kept: Vec<_> = lines
         .into_iter()
-        .filter(|line| {
-            let (_, t, _, b) = line_bounds(line);
-            let middle = clip.top + ((t + b) / 2.0 / scale) as i32;
-            !rows.iter().any(|&(top, bottom)| (top..=bottom).contains(&middle))
+        .filter_map(|line| {
+            let r = to_screen(&line_bounds(&line));
+            let (middle_x, middle_y) = ((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+            let row: Vec<&RECT> = controls.iter().filter(|c| (c.top..=c.bottom).contains(&middle_y)).collect();
+            if row.len() >= 2 && (row.iter().map(|c| c.left).min()?..=row.iter().map(|c| c.right).max()?).contains(&middle_x) {
+                return None;
+            }
+            let covered = |w: RECT| {
+                controls.iter().any(|c| {
+                    let x = (w.right.min(c.right) - w.left.max(c.left)).max(0);
+                    let y = (w.bottom.min(c.bottom) - w.top.max(c.top)).max(0);
+                    x * y * 10 > (w.right - w.left) * (w.bottom - w.top) * 3
+                })
+            };
+            let words: Vec<_> = line.into_iter().filter(|(b, _)| !covered(to_screen(b))).collect();
+            (!words.is_empty()).then_some(words)
         })
         .collect();
-    if kept.len() < before {
-        log(format!("video: {} of {before} lines are the player's own text", before - kept.len()));
+    let after_words = kept.iter().map(Vec::len).sum::<usize>();
+    if after_words < before_words {
+        log(format!("video: left out the player's own text, {} of {before_lines} lines and {} of {before_words} words", before_lines - kept.len(), before_words - after_words));
     }
     kept
 }
@@ -1205,6 +1314,24 @@ mod tests {
 
     fn texts(lines: &[Vec<(Box4, String)>]) -> Vec<String> {
         lines.iter().map(|l| l.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join(" ")).collect()
+    }
+
+    #[test]
+    fn a_video_keeps_its_picture_text_and_leaves_out_the_players() {
+        let clip = RECT { left: 0, top: 0, right: 960, bottom: 540 };
+        // Control bar: play and mute buttons on one row, the time between.
+        // A big play button over the end of a picture line.
+        let controls = [
+            RECT { left: 0, top: 500, right: 48, bottom: 540 },
+            RECT { left: 880, top: 500, right: 928, bottom: 540 },
+            RECT { left: 440, top: 290, right: 520, bottom: 370 },
+        ];
+        let lines = vec![
+            vec![piece(60.0, 80.0, 600.0, 124.0, "title")],
+            vec![piece(60.0, 310.0, 140.0, 340.0, "Three"), piece(150.0, 310.0, 400.0, 340.0, "offices"), piece(410.0, 310.0, 520.0, 340.0, "opened")],
+            vec![piece(60.0, 512.0, 130.0, 528.0, "0:00/1:00")],
+        ];
+        assert_eq!(texts(&in_picture(lines, clip, 1.0, &controls)), ["title", "Three offices"]);
     }
 
     #[test]

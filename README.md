@@ -2,18 +2,20 @@
 
 Live Text for Windows: rest the cursor on any image on screen and select the
 text inside it like normal text, then copy it with Ctrl+C or the right-click
-menu. Works in browsers and in Electron apps such as Zalo. Reads English and
-Vietnamese.
+menu. Reads English and Vietnamese. Tested in Edge and Firefox, Electron
+apps such as Zalo, Photos, Media Player and VLC.
 
-**Videos** in web pages (Edge, Chrome): a paused video's frame is read like
-an image; a playing one is left alone. The video counts as playing while
-its picture changes, or while its tab plays sound (Windows media sessions,
-matched by the tab's title), so a still picture with music is not read
-either. Pausing it (a click, the space key, a media key) brings up the
-overlay without moving the mouse: a playing video under the resting cursor
-is checked twice a second, which costs about 1-2% of one core. Text the
-player draws over the picture (controls, time, title, captions) is left
-out, so the overlay never takes the player's clicks.
+**Videos**: a paused video's frame is read like an image; a playing one is
+left alone. In web pages (Edge, Firefox) and desktop players (Media Player,
+VLC). A video counts as playing while its picture moves, or while its
+media session says so (Windows media sessions: a web video's is matched by
+its tab's title, a player's by the app), so a still picture with music is
+not read either. Pausing it (a click, the space key, a media key) brings up
+the overlay without moving the mouse: a playing video under the resting
+cursor is checked twice a second, which costs about 1-2% of one core.
+Playing it again hides the overlay within a second. Text the player draws
+over the picture (its control bar and time, a play button, captions, a
+title) is left out, so the overlay never takes the player's clicks.
 
 Selection works like native text: drag (it may start a little before or
 after a line), double-click a word, triple-click a line, Shift+click,
@@ -45,10 +47,19 @@ Translate web client (not an official API; it may change). Set
 
 ## How it works
 
-1. When the cursor rests for 150 ms, UI Automation is asked whether there is
-   an image under it. Apps that expose no accessibility tree (Electron apps
-   like Zalo) fall back to finding the image rectangle from pixels
-   (`src/rectfind.rs`).
+1. When the cursor rests for 150 ms, UI Automation is asked what is under
+   it, which decides what gets read:
+   - an image element (web pages, most apps);
+   - a web page's `<video>`, which UI Automation shows as a plain group: the
+     IAccessible2 attributes say `tag:video` (`src/video.rs`);
+   - a picture an app draws in its own control, shown as an unnamed custom
+     element, pane or group with nothing inside, at least 100x60 (Photos'
+     image, VLC's video), or a child window of an app with a media session
+     (Media Player). Named canvases (Paint's: an editor, whose clicks stay
+     its own), top-level windows (games) and web page content are left
+     alone;
+   - in apps that expose no accessibility tree (Electron apps like Zalo),
+     the image rectangle found from pixels (`src/rectfind.rs`).
 2. The image is captured with GDI, upscaled 2x and run through Windows OCR,
    which finds the lines and words. The overlay appears right away, so text
    can be selected while step 3 runs.
@@ -135,11 +146,15 @@ and memory on this machine.
 - A single click on a word inside the image is taken by the overlay, so image
   links do not open when clicked exactly on their text.
 - Content behind DRM or windows running as administrator cannot be read.
-- Videos are recognised in Chromium browsers (tested in Edge, with HTML5
-  video and YouTube). A muted video whose picture does not move counts as
-  paused. Video players in desktop apps (Media Player, VLC) are not handled.
-- Over a paused video, picture text on the same row as one of the player's
-  controls or captions is left out with them.
+- Not every app can be read. Pictures an app draws without telling UI
+  Automation anything (a top-level window drawn by hand, as games are), a
+  named canvas (editors such as Paint), thumbnails inside list items (Media
+  Player's library, File Explorer), DRM-protected video (Netflix, which
+  shows black to screen captures) and windows running as administrator are
+  not read. Classic Windows Media Player was not tested.
+- A muted video whose picture does not move counts as paused.
+- Over a paused video, picture text between the buttons of a control bar,
+  or under one of the player's controls or captions, is left out with them.
 - A video with a still picture that has only just started playing (under a
   second) can count as paused until Windows lists its media session; the
   overlay, still invisible, goes away at the next check (0.3 s).

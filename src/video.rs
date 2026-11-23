@@ -1,11 +1,12 @@
-//! Videos in web pages. A paused video's frame is read like an image; a
-//! playing one is left alone.
+//! Videos, in web pages and in desktop players. A paused video's frame is
+//! read like an image; a playing one is left alone.
 //!
 //! Chromium (Edge, Chrome) shows a `<video>` to UI Automation as a plain
 //! group, like any `<div>`; the HTML tag is only in the IAccessible2
 //! attributes screen readers read (`tag:video`). Whether it plays is told by the
 //! frames changing (`worker`) and, for a video showing a still picture
-//! (music over cover art), by the system's media sessions.
+//! (music over cover art), by the system's media sessions: a web video's by
+//! its tab's title, a desktop player's by the app (`Media`).
 
 #![allow(non_snake_case)]
 
@@ -13,7 +14,9 @@ use std::cell::OnceCell;
 
 use windows::Media::Control::{GlobalSystemMediaTransportControlsSessionManager as Manager, GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status};
 use windows::Win32::Foundation::*;
+use windows::Win32::Storage::Packaging::Appx::GetApplicationUserModelId;
 use windows::Win32::System::Com::IServiceProvider;
+use windows::Win32::System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::WindowsAndMessaging::GetWindowTextW;
@@ -98,27 +101,91 @@ pub fn window_title(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buf[..n])
 }
 
+/// Where a video's media session is found.
+#[derive(Clone, Copy, Debug)]
+pub enum Media {
+    /// A web page's video: the session whose title is in this window's
+    /// title (the browser shows the tab's title), not music in another tab.
+    Tab(HWND),
+    /// A desktop player's video: the session of the app with this process.
+    App(u32),
+}
+
 /// The system's media sessions (what the volume flyout's media controls
-/// show): one per app playing audible media, with its title.
+/// show): one per app with media, with its title and playback state.
 #[derive(Default)]
 pub struct Sessions {
     manager: OnceCell<Option<Manager>>,
 }
 
 impl Sessions {
-    /// True if media is playing whose title is in `window_title`: the video
-    /// in that browser tab, not music playing in another app or tab.
-    pub fn playing_in(&self, window_title: &str) -> bool {
+    fn all(&self) -> Vec<windows::Media::Control::GlobalSystemMediaTransportControlsSession> {
         let Some(manager) = self.manager.get_or_init(|| Manager::RequestAsync().and_then(|op| op.join()).ok()) else {
-            return false;
+            return Vec::new();
         };
-        let Ok(sessions) = manager.GetSessions() else { return false };
-        sessions.into_iter().any(|session| {
+        manager.GetSessions().map(|s| s.into_iter().collect()).unwrap_or_default()
+    }
+
+    /// True if the media `media` points at is playing.
+    pub fn playing(&self, media: Media) -> bool {
+        let app = match media {
+            Media::App(pid) => app_ids(pid),
+            Media::Tab(_) => Vec::new(),
+        };
+        self.all().into_iter().any(|session| {
             let playing = session.GetPlaybackInfo().and_then(|info| info.PlaybackStatus()).is_ok_and(|s| s == Status::Playing);
-            let title = || session.TryGetMediaPropertiesAsync().and_then(|op| op.join()).and_then(|p| p.Title()).map(|t| t.to_string()).unwrap_or_default();
-            playing && matches_window(&title(), window_title)
+            playing
+                && match media {
+                    Media::Tab(window) => {
+                        let title = session.TryGetMediaPropertiesAsync().and_then(|op| op.join()).and_then(|p| p.Title()).map(|t| t.to_string()).unwrap_or_default();
+                        matches_window(&title, &window_title(window))
+                    }
+                    Media::App(_) => session.SourceAppUserModelId().is_ok_and(|id| matches_app(&id.to_string(), &app)),
+                }
         })
     }
+
+    /// True if the app with this process has a media session (playing or
+    /// not): it is a media player.
+    pub fn has_app(&self, pid: u32) -> bool {
+        let app = app_ids(pid);
+        !app.is_empty() && self.all().into_iter().any(|session| session.SourceAppUserModelId().is_ok_and(|id| matches_app(&id.to_string(), &app)))
+    }
+}
+
+/// What a media session may name an app by: its package app ID (Microsoft
+/// Media Player is "Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic"),
+/// or, for an app without a package, its executable ("vlc.exe").
+fn app_ids(pid: u32) -> Vec<String> {
+    let Ok(process) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else { return Vec::new() };
+    let mut ids = Vec::new();
+    let mut buf = [0u16; 512];
+    let mut len = buf.len() as u32;
+    if unsafe { GetApplicationUserModelId(process, &mut len, Some(PWSTR(buf.as_mut_ptr()))) }.is_ok() {
+        ids.push(String::from_utf16_lossy(&buf[..len.saturating_sub(1) as usize]));
+    }
+    let mut len = buf.len() as u32;
+    if unsafe { QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len) }.is_ok() {
+        let path = String::from_utf16_lossy(&buf[..len as usize]);
+        if let Some(exe) = path.rsplit('\\').next() {
+            ids.push(exe.to_string());
+        }
+    }
+    unsafe {
+        let _ = CloseHandle(process);
+    }
+    ids
+}
+
+/// A session's app ID names one of `app`'s IDs (an executable's name may
+/// appear with or without its folder or ".exe").
+fn matches_app(session_app: &str, app: &[String]) -> bool {
+    let session_app = session_app.to_lowercase();
+    app.iter().any(|id| {
+        let id = id.to_lowercase();
+        let stem = id.trim_end_matches(".exe");
+        session_app == id || (stem.len() >= 3 && (session_app == stem || session_app.ends_with(&format!("\\{id}")) || session_app.ends_with(&format!("\\{stem}"))))
+    })
 }
 
 /// A media title belongs to a window when the window's title holds it (a
@@ -139,6 +206,18 @@ mod tests {
         assert_eq!(attribute(a, "tag").as_deref(), Some("video"));
         assert_eq!(attribute(a, "class").as_deref(), Some("video-stream html5-main-video"));
         assert_eq!(attribute(a, "ta"), None);
+    }
+
+    #[test]
+    fn a_session_belongs_to_the_app_it_names() {
+        let player = vec!["Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic".to_string(), "Microsoft.Media.Player.exe".to_string()];
+        assert!(matches_app("Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic", &player));
+        let vlc = vec!["vlc.exe".to_string()];
+        assert!(matches_app("vlc.exe", &vlc));
+        assert!(matches_app("VLC", &vlc));
+        assert!(matches_app("C:\\Program Files\\VideoLAN\\VLC\\vlc.exe", &vlc));
+        assert!(!matches_app("Spotify.exe", &vlc));
+        assert!(!matches_app("Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic", &vlc));
     }
 
     #[test]
