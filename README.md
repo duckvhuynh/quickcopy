@@ -6,7 +6,7 @@
 
 Select, copy and translate the text inside any image on your Windows screen.
 
-QuickCopy is Live Text for Windows. Rest the cursor on an image, a
+QuickCopy works like Live Text or Google Lens, on Windows. Rest the cursor on an image, a
 screenshot or a paused video, and the text in it becomes selectable like
 normal text. Copy it with Ctrl+C or translate it in place. QuickCopy reads
 English and Vietnamese, and all text recognition runs on your PC. It is a

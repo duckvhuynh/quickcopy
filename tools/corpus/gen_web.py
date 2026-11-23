@@ -1,5 +1,5 @@
 """Screenshots public web pages with headless Edge to web/vi-web/<id>.png
-and writes manifests/vi-web.json, whose phrases are the page's visible
+and writes manifests/local-vi-web.json (gitignored: it holds the pages' text), whose phrases are the page's visible
 text read from the DOM.
 
 web_pages.json lists the pages:
@@ -44,7 +44,7 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGES = os.path.join(HERE, "web_pages.json")
 OUT = os.path.join(HERE, "web", "vi-web")
-MANIFEST = os.path.join(HERE, "manifests", "vi-web.json")
+MANIFEST = os.path.join(HERE, "manifests", "local-vi-web.json")
 EDGE = next(p for p in [r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"] if os.path.exists(p))
 SETTLE = 3.0
 

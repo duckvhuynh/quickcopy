@@ -17,7 +17,8 @@ as "Chuyến"), which the similarity allowed for long phrases would hide.
 
 `gen_web.py` screenshots the real Vietnamese pages listed in
 `web_pages.json` with headless Edge and takes their visible text lines from
-the page as phrases (`manifests/vi-web.json`). A rerun takes new shots of
+the page as phrases (`manifests/local-vi-web.json`, kept out of git since
+it is the pages' own text). A rerun takes new shots of
 pages that may have changed, so image and phrases are always regenerated
 together.
 
