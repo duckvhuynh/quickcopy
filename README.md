@@ -77,8 +77,11 @@ Translate web client (not an official API; it may change). Set
    while step 3 runs.
 3. In Vietnamese mode the lines are re-read by
    [VieSVTR](https://huggingface.co/ngocthua830/viesvtr), because Windows OCR
-   has no Vietnamese recognizer (`src/viet.rs`). A copy made before it
-   finishes waits for it, so the clipboard always gets the Vietnamese text.
+   has no Vietnamese recognizer (`src/viet.rs`). Where it was unsure of a
+   tone mark, the mark is picked by how often each syllable and pair of
+   syllables occurs in Vietnamese Wikipedia (`src/viet/lm.rs`). A copy made
+   before it finishes waits for it, so the clipboard always gets the
+   Vietnamese text.
 4. A transparent overlay is laid over the text lines only, so clicks elsewhere
    on the image still reach the app underneath.
 5. Lines are grouped into blocks of lines stacked under one another: a
@@ -112,6 +115,12 @@ models/viesvtr/viesvtr_v7.onnx
 
 next to the executable or in a parent folder of it. VieSVTR is licensed
 **CC BY-NC 4.0 (non-commercial use only)**.
+
+`models/viesvtr/vi_syllables.bin` (5.5 MB, in the repository) goes next to
+it: syllable and pair frequencies that pick tone marks, loaded and freed
+with the model (about 12 MB while loaded). Without it lines are read as the
+model reads them. It is counted from Vietnamese Wikipedia (text CC BY-SA
+4.0) by `tools/vietlm/build.py`, which says how to rebuild it.
 
 ONNX Runtime is loaded at runtime: `onnxruntime.dll` next to the executable
 if present, otherwise the copy Windows 11 ships in `System32`. On Windows 10,

@@ -1,4 +1,5 @@
-//! Vietnamese text-line recognition with VieSVTR v7 (ONNX, greedy CTC).
+//! Vietnamese text-line recognition with VieSVTR v7 (ONNX, greedy CTC), its
+//! unsure tone marks picked by syllable frequencies (`viet/lm.rs`).
 //!
 //! Model and charset: https://huggingface.co/ngocthua830/viesvtr
 //! (CC BY-NC 4.0: non-commercial use only).
@@ -8,6 +9,8 @@
 
 use std::path::{Path, PathBuf};
 
+mod lm;
+
 use ort::session::Session;
 use ort::value::Tensor;
 
@@ -16,6 +19,12 @@ const W_STRIDE: usize = 4;
 const W_MIN: usize = 32;
 const W_MAX: usize = 1600;
 const MODEL_FILE: &str = "models/viesvtr/viesvtr_v7.onnx";
+/// Next to the model: syllable frequencies that pick tone marks (`lm.rs`).
+const SYLLABLES_FILE: &str = "vi_syllables.bin";
+/// A letter with other marks is tried when the model gave it at most this
+/// much less (nats) than its first choice; at most this many per letter.
+const CLOSE: f32 = 9.0;
+const TRIED: usize = 4;
 /// Lines per model run. Measured on a 14-line page: 1 line 320 ms,
 /// 4 lines 285 ms, 16 lines 350 ms (bigger batches pad too much).
 const MAX_BATCH: usize = 4;
@@ -35,6 +44,7 @@ pub struct RecChar {
 pub struct Recognizer {
     session: Session,
     vocab: Vec<char>,
+    syllables: Option<lm::Lm>,
 }
 
 /// ONNX Runtime allows one environment per process, so it is made once and
@@ -76,7 +86,11 @@ impl Recognizer {
             .map_err(|e| err(&e))?
             .commit_from_file(path)
             .map_err(|e| err(&e))?;
-        Ok(Self { session, vocab: VOCAB.chars().collect() })
+        // Without the table lines are read as the model reads them.
+        let syllables = lm::Lm::load(&path.with_file_name(SYLLABLES_FILE))
+            .map_err(|e| crate::worker::log(format!("Vietnamese tone marks as read: {e}")))
+            .ok();
+        Ok(Self { session, vocab: VOCAB.chars().collect(), syllables })
     }
 
     /// Recognizes text lines. Lines of similar width run together as one
@@ -127,18 +141,64 @@ impl Recognizer {
                 // Only the steps covering this line's own width, not its padding.
                 let steps = (t * tw).div_ceil(wmax).clamp(1, t);
                 let rows = &logits[b * t * v..][..steps * v];
-                out[i] = ctc_greedy(rows, steps, v)
-                    .into_iter()
-                    .filter_map(|(class, t0, t1)| {
-                        let ch = *self.vocab.get(class.checked_sub(1)?)?;
-                        Some(RecChar { ch, x0: t0 as f32 / steps as f32, x1: (t1 + 1) as f32 / steps as f32 })
-                    })
+                let read: Vec<(usize, usize, usize)> =
+                    ctc_greedy(rows, steps, v).into_iter().filter(|&(class, _, _)| class >= 1 && class <= self.vocab.len()).collect();
+                let mut chars: Vec<char> = read.iter().map(|&(class, _, _)| self.vocab[class - 1]).collect();
+                if let Some(lm) = &self.syllables {
+                    chars = lm.pick(&choices(&self.vocab, rows, v, &read));
+                }
+                out[i] = read
+                    .iter()
+                    .zip(chars)
+                    .map(|(&(_, t0, t1), ch)| RecChar { ch, x0: t0 as f32 / steps as f32, x1: (t1 + 1) as f32 / steps as f32 })
                     .collect();
             }
             start = end;
         }
         Ok(out)
     }
+}
+
+/// For each character read, the letters with other marks the model nearly
+/// read there instead, with how much less likely (nats) at the steps it
+/// read the character.
+fn choices(vocab: &[char], rows: &[f32], v: usize, read: &[(usize, usize, usize)]) -> Vec<Vec<lm::Choice>> {
+    let logp = log_probs(rows, v);
+    let class_of = |ch: char| vocab.iter().position(|&c| c == ch).map(|i| i + 1);
+    let best = |class: usize, t0: usize, t1: usize| (t0..=t1).map(|t| logp[t * v + class]).fold(f32::MIN, f32::max);
+    read.iter()
+        .map(|&(class, t0, t1)| {
+            let ch = vocab[class - 1];
+            let own = best(class, t0, t1);
+            let mut out = vec![lm::Choice { ch, cost: 0.0 }];
+            let mut others: Vec<lm::Choice> = lm::family(ch)
+                .into_iter()
+                .filter(|&c| c != ch)
+                .filter_map(|c| Some(lm::Choice { ch: c, cost: own - best(class_of(c)?, t0, t1) }))
+                .filter(|c| c.cost < CLOSE)
+                .collect();
+            others.sort_by(|a, b| a.cost.total_cmp(&b.cost));
+            out.extend(others.into_iter().take(TRIED - 1));
+            out
+        })
+        .collect()
+}
+
+/// Log-probabilities per step: the model's output may be scores
+/// (log-softmax them) or already probabilities.
+fn log_probs(rows: &[f32], v: usize) -> Vec<f32> {
+    let mut out = rows.to_vec();
+    for row in out.chunks_mut(v) {
+        let sum: f32 = row.iter().sum();
+        if row.iter().all(|&x| (0.0..=1.0).contains(&x)) && (sum - 1.0).abs() < 0.01 {
+            row.iter_mut().for_each(|x| *x = x.max(1e-30).ln());
+        } else {
+            let max = row.iter().copied().fold(f32::MIN, f32::max);
+            let lse = max + row.iter().map(|x| (x - max).exp()).sum::<f32>().ln();
+            row.iter_mut().for_each(|x| *x -= lse);
+        }
+    }
+    out
 }
 
 /// One text line crop: top-down BGRA pixels.
