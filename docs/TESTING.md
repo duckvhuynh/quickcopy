@@ -37,6 +37,7 @@ quickcopy --layout image.png              # lines in reading order, with their b
 quickcopy --uia X Y                       # what UI Automation and IAccessible2 report at a point
 quickcopy --drag image.png X0 Y0 X1 Y1    # what a drag between two points selects
 quickcopy --settings                      # open the settings window
+quickcopy --check-update                  # latest release, whether it is newer, its asset URLs
 ```
 
 ## Environment variables
@@ -48,6 +49,13 @@ quickcopy --settings                      # open the settings window
 | `QC_THEME=light` or `dark` | Override the Windows app mode. Otherwise the UI follows it and the accent color. |
 | `QC_GOOGLE_KEY` | Use this key for translation instead of the Google Translate web client's key. |
 | `QC_CAPTURABLE=1` | Let screenshots see the overlay while it has focus, to check what it draws. |
+| `QC_UPDATE_API` | Full URL of a release JSON to check instead of GitHub's (plain http allowed), for testing updates. |
+| `QC_INSTANCE` | Name of a separate single-instance mutex, so a test copy runs beside an installed QuickCopy. |
+
+`tools/update/e2e.ps1` runs a real update against a fake release served
+from this PC: it installs a newer exe into a temp copy of the app, checks
+that a wrong hash installs nothing (`-BadHash`), and that a new version
+that does not start is rolled back (`-Fails`).
 
 ## OCR corpus (`tools/corpus`)
 

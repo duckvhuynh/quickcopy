@@ -42,6 +42,18 @@ The first public release.
 - Debug flags `--ocr-file`, `--probe`, `--layout`, `--uia` and `--drag`.
 - Test tools: an OCR corpus (`tools/corpus`), selection cases
   (`tools/selection`) and video cases (`tools/video`).
+- Update checker: once a day (and from **Check now** in the settings) it
+  looks for a newer version in GitHub Releases, offers **Update to X.Y.Z**
+  in the tray, checks the download's SHA-256 against `SHA256SUMS.txt`,
+  installs it and restarts, and puts the old version back if the new one
+  does not start.
+- Version information and publisher in the exe, and an application
+  manifest.
+- Release packaging (`scripts/package.ps1`), CI, a tag-driven release
+  workflow with build provenance attestations, and winget and Scoop
+  manifests.
+- The platform-independent code builds and passes its tests on Linux, a
+  first step toward a Linux version (`docs/linux.md`).
 - Licenses (MIT OR Apache-2.0), third-party notices, and documents for
   users and contributors.
 

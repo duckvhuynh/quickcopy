@@ -49,11 +49,10 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-  # The OCR, overlay and tray are Win32; this job tracks the platform-
-  # independent part. Allowed to fail until the Linux port makes it build.
+  # The OCR, overlay and tray are Win32; this job keeps the platform-
+  # independent part building and tested on Linux (see docs/linux.md).
   linux:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable

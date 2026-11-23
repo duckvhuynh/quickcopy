@@ -163,8 +163,13 @@ Right-click the tray icon for **Settings…**, **Pause** and
 QuickCopy checks GitHub Releases for a newer version once a day. When one
 exists, the tray menu shows **Update to X.Y.Z**. Select it to download the
 new version. QuickCopy checks the download's SHA-256 hash before it
-installs it. Turn off **Check for updates automatically** in the settings
-to stop the daily check.
+installs it, swaps the exe and restarts; if the new version does not
+start, the old one is put back. Turn off **Check for updates
+automatically** in the settings to stop the daily check; **Check now** in
+the settings checks at once. The update replaces `quickcopy.exe` only, so
+keep QuickCopy in a folder you can write to (for example under
+`%LOCALAPPDATA%`), not in Program Files. `quickcopy --check-update`
+prints what the check finds without installing anything.
 
 ## Privacy
 
