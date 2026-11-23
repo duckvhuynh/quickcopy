@@ -68,8 +68,13 @@ Translate web client (not an official API; it may change). Set
      page's own there (text, links, images, controls), so a box of real
      text is left alone.
 2. The image is captured with GDI, upscaled 2x and run through Windows OCR,
-   which finds the lines and words. The overlay appears right away, so text
-   can be selected while step 3 runs.
+   which finds the lines and words. Windows OCR skips some lines in tightly
+   stacked text (an underline just above the next line is enough), so what
+   still has letter strokes outside every word found is cut into lines, laid
+   out one under another with space around each, and read again
+   (`src/missed.rs`). Shapes it reads as letters (a chart's bars as `III`)
+   are dropped. The overlay appears right away, so text can be selected
+   while step 3 runs.
 3. In Vietnamese mode the lines are re-read by
    [VieSVTR](https://huggingface.co/ngocthua830/viesvtr), because Windows OCR
    has no Vietnamese recognizer (`src/viet.rs`). A copy made before it
@@ -121,6 +126,12 @@ quickcopy --layout image.png     # lines in reading order, with their blocks
 quickcopy --uia X Y              # what UI Automation and IAccessible2 report at a point
 quickcopy --drag image.png X0 Y0 X1 Y1   # what a drag between two points selects
 ```
+
+`tools/corpus/` checks that the text in about 70 images is read: real
+screenshots, documents, photos of print and Vietnamese text from the web
+(downloaded by `fetch.py`, not kept in git), and pages made for the hard
+cases (`gen_synth.py`). `run_corpus.py <exe>` prints the phrases each image
+missed and a total; see its README.
 
 `tools/selection/` tests selection on many layouts (a two-column article, a
 table, forms, a chat, a dashboard, a receipt, code, a three-pane issue

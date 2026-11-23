@@ -1,0 +1,73 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="size" content="1080x1350"><meta name="category" content="infographic-dark-code">
+<style>
+*{box-sizing:border-box}
+body{margin:0;width:1080px;height:1350px;background:#0d0f1a;color:#e8e9f0;font-family:'Segoe UI',Arial,sans-serif;overflow:hidden;position:relative}
+.top{display:flex;justify-content:space-between;padding:12px 28px;font-size:12px;font-weight:700;letter-spacing:.5px;border-bottom:1px solid #f08a4b55}
+h1{font-size:64px;line-height:1.05;margin:36px 56px 10px;font-weight:700}
+h1 em{font-style:normal;color:#ff8a4c}
+.sub{margin:0 56px 26px;font-size:20px;color:#b8bccb}
+.grp{margin:0 56px 14px}
+.gh{display:flex;align-items:baseline;gap:14px;margin-bottom:2px}
+.gh b{font-size:22px;font-weight:500}
+.gh span{font-size:15px;color:#8a8fa3}
+.gh i{margin-left:auto;font-style:normal;font-family:Consolas,monospace;font-size:14px;color:#8a8fa3}
+.row{display:grid;grid-template-columns:330px 1fr;height:21px;line-height:21px;font-size:19px;overflow:visible}
+.row>span{line-height:21px;white-space:nowrap}
+.n{display:inline-block;width:26px;font-family:Consolas,monospace;font-size:13px;color:#6c7186}
+.c{font-family:Consolas,monospace;font-size:19px;text-decoration:underline;text-underline-offset:2px}
+.d{font-size:18px;color:#e8e9f0}
+.blue .c,.blue b{color:#6ab0ff}.pink .c,.pink b{color:#ff7ab8}.green .c,.green b{color:#5ee0b0}.gold .c,.gold b{color:#ffd166}.violet .c,.violet b{color:#c3a4ff}.coral .c,.coral b{color:#ff9a76}
+.foot{position:absolute;bottom:0;left:0;right:0;height:64px;border-top:1px solid #2a2e44;display:flex;align-items:center;justify-content:space-between;padding:0 56px;font-size:17px;background:#11131f}
+</style></head><body>
+<div class="top"><span data-expect>+ BUILD WITH THE CLI</span><span data-expect>FREE CHEAT SHEET</span></div>
+<h1 data-expect>33 commands for</h1><h1 style="margin-top:0" data-expect>your <em>terminal agent</em></h1>
+<div class="sub" data-expect>Every command works offline, in any folder, with no account needed.</div>
+
+<div class="grp blue"><div class="gh"><b data-expect>Project setup</b><span data-expect>start a repo the right way</span><i data-expect>6 setup commands</i></div>
+<div class="row"><span data-expect><span class="n">01</span> <span class="c">/init-repo</span></span><span class="d" data-expect>Creates the folder layout and a first commit</span></div>
+<div class="row"><span data-expect><span class="n">02</span> <span class="c">/scaffold</span></span><span class="d" data-expect>Fills in a template for your language</span></div>
+<div class="row"><span data-expect><span class="n">03</span> <span class="c">/add-ci</span></span><span class="d" data-expect>Writes a workflow that runs tests on push</span></div>
+<div class="row"><span data-expect><span class="n">04</span> <span class="c">/lockfile-sync</span></span><span class="d" data-expect>Pins every dependency to one version</span></div>
+<div class="row"><span data-expect><span class="n">05</span> <span class="c">/env-check</span></span><span class="d" data-expect>Lists missing tools and how to get them</span></div>
+<div class="row"><span data-expect><span class="n">06</span> <span class="c">/readme-draft</span></span><span class="d" data-expect>Drafts a readme from the code it finds</span></div></div>
+
+<div class="grp pink"><div class="gh"><b data-expect>Reading code</b><span data-expect>find your way around</span><i data-expect>7 reading commands</i></div>
+<div class="row"><span data-expect><span class="n">07</span> <span class="c">/map-modules</span></span><span class="d" data-expect>Draws which file imports which</span></div>
+<div class="row"><span data-expect><span class="n">08</span> <span class="c">/who-calls</span></span><span class="d" data-expect>Every caller of a function, with line numbers</span></div>
+<div class="row"><span data-expect><span class="n">09</span> <span class="c">/explain-file</span></span><span class="d" data-expect>A plain summary of one file in ten lines</span></div>
+<div class="row"><span data-expect><span class="n">10</span> <span class="c">/dead-code</span></span><span class="d" data-expect>Functions nothing calls any more</span></div>
+<div class="row"><span data-expect><span class="n">11</span> <span class="c">/hot-paths</span></span><span class="d" data-expect>Code that changed most in the last month</span></div>
+<div class="row"><span data-expect><span class="n">12</span> <span class="c">/blame-story</span></span><span class="d" data-expect>Why a line looks the way it does</span></div>
+<div class="row"><span data-expect><span class="n">13</span> <span class="c">/todo-sweep</span></span><span class="d" data-expect>Collects every TODO and FIXME into a list</span></div></div>
+
+<div class="grp green"><div class="gh"><b data-expect>Testing</b><span data-expect>catch it before users do</span><i data-expect>5 test commands</i></div>
+<div class="row"><span data-expect><span class="n">14</span> <span class="c">/test-gaps</span></span><span class="d" data-expect>Branches no test ever reaches</span></div>
+<div class="row"><span data-expect><span class="n">15</span> <span class="c">/flaky-hunt</span></span><span class="d" data-expect>Reruns a suite fifty times and ranks failures</span></div>
+<div class="row"><span data-expect><span class="n">16</span> <span class="c">/snapshot-diff</span></span><span class="d" data-expect>Shows what changed in a failing snapshot</span></div>
+<div class="row"><span data-expect><span class="n">17</span> <span class="c">/fuzz-input</span></span><span class="d" data-expect>Throws odd strings at a parser for a minute</span></div>
+<div class="row"><span data-expect><span class="n">18</span> <span class="c">/bisect-bug</span></span><span class="d" data-expect>Finds the commit that broke a test</span></div></div>
+
+<div class="grp gold"><div class="gh"><b data-expect>Shipping</b><span data-expect>from branch to release</span><i data-expect>6 ship commands</i></div>
+<div class="row"><span data-expect><span class="n">19</span> <span class="c">/split-commit</span></span><span class="d" data-expect>Breaks a big change into small reviewable commits</span></div>
+<div class="row"><span data-expect><span class="n">20</span> <span class="c">/pr-summary</span></span><span class="d" data-expect>Writes the pull request description for you</span></div>
+<div class="row"><span data-expect><span class="n">21</span> <span class="c">/changelog</span></span><span class="d" data-expect>Turns merged pull requests into release notes</span></div>
+<div class="row"><span data-expect><span class="n">22</span> <span class="c">/bump-version</span></span><span class="d" data-expect>Raises the version number in every manifest</span></div>
+<div class="row"><span data-expect><span class="n">23</span> <span class="c">/tag-release</span></span><span class="d" data-expect>Tags, builds and uploads the installers</span></div>
+<div class="row"><span data-expect><span class="n">24</span> <span class="c">/rollback</span></span><span class="d" data-expect>Puts the previous release back in two minutes</span></div></div>
+
+<div class="grp violet"><div class="gh"><b data-expect>Performance</b><span data-expect>make it fast and keep it fast</span><i data-expect>5 perf commands</i></div>
+<div class="row"><span data-expect><span class="n">25</span> <span class="c">/profile-run</span></span><span class="d" data-expect>Records where the time goes during one run</span></div>
+<div class="row"><span data-expect><span class="n">26</span> <span class="c">/flamegraph</span></span><span class="d" data-expect>Renders the profile as an interactive chart</span></div>
+<div class="row"><span data-expect><span class="n">27</span> <span class="c">/alloc-watch</span></span><span class="d" data-expect>Counts memory allocations per function</span></div>
+<div class="row"><span data-expect><span class="n">28</span> <span class="c">/bench-compare</span></span><span class="d" data-expect>Compares two branches on the same benchmark</span></div>
+<div class="row"><span data-expect><span class="n">29</span> <span class="c">/size-budget</span></span><span class="d" data-expect>Fails the build when the bundle grows past 2 MB</span></div></div>
+
+<div class="grp coral"><div class="gh"><b data-expect>Housekeeping</b><span data-expect>the boring parts, done for you</span><i data-expect>4 chores</i></div>
+<div class="row"><span data-expect><span class="n">30</span> <span class="c">/deps-update</span></span><span class="d" data-expect>Updates dependencies one at a time and runs tests</span></div>
+<div class="row"><span data-expect><span class="n">31</span> <span class="c">/license-scan</span></span><span class="d" data-expect>Flags packages whose license you cannot ship</span></div>
+<div class="row"><span data-expect><span class="n">32</span> <span class="c">/secret-scan</span></span><span class="d" data-expect>Finds keys and passwords committed by mistake</span></div>
+<div class="row"><span data-expect><span class="n">33</span> <span class="c">/prune-branches</span></span><span class="d" data-expect>Deletes merged branches older than ninety days</span></div></div>
+
+<div class="foot"><span><span data-expect>MAYA CHEN</span> · <span data-expect>mayabuilds.dev</span></span><span data-expect>Bookmark this page</span></div>
+</body></html>

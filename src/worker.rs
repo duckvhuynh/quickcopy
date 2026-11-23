@@ -564,6 +564,13 @@ impl Detector {
 
     /// Windows OCR: per line, its words' boxes (capture pixels) and text.
     fn windows_lines(&self, pixels: &[u8], sw: i32, sh: i32) -> Result<Vec<Vec<(Box4, String)>>> {
+        let mut lines = without_shapes(self.recognize(pixels, sw, sh)?);
+        lines.extend(self.missed_lines(pixels, sw, sh, &lines)?);
+        Ok(join_rows(lines))
+    }
+
+    /// Windows OCR on a BGRA buffer, line by line, as it reports them.
+    fn recognize(&self, pixels: &[u8], sw: i32, sh: i32) -> Result<Vec<Vec<(Box4, String)>>> {
         let writer = DataWriter::new()?;
         writer.WriteBytes(pixels)?;
         let buffer = writer.DetachBuffer()?;
@@ -581,7 +588,50 @@ impl Detector {
             }
             out.push(boxes);
         }
-        Ok(join_rows(out))
+        Ok(out)
+    }
+
+    /// Lines Windows OCR skipped (see `missed`), read again one by one on
+    /// sheets where each has space around it. In `pixels` coordinates.
+    fn missed_lines(&self, pixels: &[u8], sw: i32, sh: i32, read: &[Vec<(Box4, String)>]) -> Result<Vec<Vec<(Box4, String)>>> {
+        let t0 = Instant::now();
+        let found: Vec<crate::missed::Band> = read.iter().flatten().map(|((l, t, r, b), _)| (*l as usize, *t as usize, r.ceil() as usize, b.ceil() as usize)).collect();
+        let bands = crate::missed::bands(pixels, sw as usize, sh as usize, &found);
+        if bands.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for sheet in crate::missed::sheets(pixels, sw as usize, &bands, self.max_dim as usize) {
+            for line in self.recognize(&sheet.px, sheet.w as i32, sheet.h as i32)? {
+                let (_, t, _, b) = line_bounds(&line);
+                let middle = (t + b) / 2.0;
+                let Some(&(band, (x, y))) = sheet.placed.iter().find(|(band, (_, y))| (*y as f32..(*y + band.3 - band.1) as f32).contains(&middle)) else {
+                    continue;
+                };
+                // Back to where the line is in the image.
+                let (dx, dy) = (band.0 as f32 - x as f32, band.1 as f32 - y as f32);
+                // A piece of a word already read (the end of a tilted line
+                // sticking out of its box, above or below it) is not read twice.
+                let covered = |w: &Box4| {
+                    read.iter().flatten().any(|(r, _)| {
+                        let reach = (r.3 - r.1) / 2.0;
+                        let x = (w.2.min(r.2) - w.0.max(r.0)).max(0.0);
+                        let y = (w.3.min(r.3 + reach) - w.1.max(r.1 - reach)).max(0.0);
+                        x * y * 10.0 > (w.2 - w.0) * (w.3 - w.1) * 3.0
+                    })
+                };
+                let line: Vec<_> = line.into_iter().map(|((l, t, r, b), s)| ((l + dx, t + dy, r + dx, b + dy), s)).filter(|(w, _)| !covered(w)).collect();
+                // Specks of a picture read as a letter or two are not text.
+                if line.iter().map(|(_, s)| s.chars().filter(|c| c.is_alphanumeric()).count()).sum::<usize>() >= 2 {
+                    out.push(line);
+                }
+            }
+        }
+        log(format!("missed lines: {} candidates, {} read again in {:?}", bands.len(), out.len(), t0.elapsed()));
+        if std::env::var_os("QC_DEBUG_MISSED").is_some() {
+            log(format!("missed bands: {bands:?}"));
+        }
+        Ok(out)
     }
 
     /// Re-reads every line with VieSVTR, which knows the tone marks Windows
@@ -1063,6 +1113,26 @@ fn in_picture(lines: Vec<Vec<(Box4, String)>>, clip: RECT, scale: f32, controls:
 }
 
 /// The box around a line's words.
+/// Drops "words" Windows OCR makes of shapes: a chart's bars read as `III`,
+/// a tall frame as `l`. They are far taller than the text around them
+/// (three times the median word height) and made only of strokes; a big
+/// title is as tall but made of real letters.
+fn without_shapes(lines: Vec<Vec<(Box4, String)>>) -> Vec<Vec<(Box4, String)>> {
+    let mut heights: Vec<f32> = lines.iter().flatten().map(|(b, _)| b.3 - b.1).collect();
+    if heights.len() < 3 {
+        return lines;
+    }
+    heights.sort_by(f32::total_cmp);
+    let limit = heights[heights.len() / 2] * 3.0;
+    let before = heights.len();
+    let kept: Vec<Vec<(Box4, String)>> = lines.into_iter().map(|l| l.into_iter().filter(|(b, s)| b.3 - b.1 <= limit || !s.chars().all(|c| "Il1|![]".contains(c))).collect::<Vec<_>>()).filter(|l| !l.is_empty()).collect();
+    let dropped = before - kept.iter().map(Vec::len).sum::<usize>();
+    if dropped > 0 {
+        log(format!("dropped {dropped} words taller than {limit:.0} px (shapes, not text)"));
+    }
+    kept
+}
+
 fn line_bounds(line: &[(Box4, String)]) -> Box4 {
     line.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |a, (b, _)| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)))
 }
@@ -1151,6 +1221,11 @@ fn words_from_chars(crop: &Crop, chars: &[viet::RecChar], boxes: &[(Box4, String
         let right = if line_right - last.0.2 < reach { line_right } else { last.0.2 };
         // (right edge of the word before, left edge of the word after)
         let measured: Vec<(f32, f32)> = boxes.windows(2).map(|pair| (pair[0].0.2, pair[1].0.0)).filter(|(r, l)| l >= r).collect();
+        // A measured gap with words of this reading inside it is not a gap
+        // here: Windows OCR missed those words (a sign whose middle it did
+        // not read). Snapping to it stacked them all on its edge, 1 px wide.
+        let middles: Vec<f32> = out.iter().map(|(bx, _)| (bx.0 + bx.2) / 2.0).collect();
+        let measured: Vec<(f32, f32)> = measured.into_iter().filter(|g| !middles.iter().any(|m| (g.0..=g.1).contains(m))).collect();
         let mut edges = vec![(left, left)];
         edges.extend(out.windows(2).map(|pair| {
             let middle = (pair[0].0.2 + pair[1].0.0) / 2.0;
@@ -1424,6 +1499,24 @@ mod tests {
         // is the one Windows OCR measured nearest to it.
         assert_eq!((words[0].0.0, words[0].0.2), (100.0, 180.0));
         assert_eq!((words[1].0.0, words[1].0.2), (190.0, 400.0));
+    }
+
+    #[test]
+    fn vietnamese_words_windows_ocr_missed_keep_their_own_width() {
+        // A sign: Windows OCR read only the first and the last word, the
+        // model read all four. The words between keep where the model saw
+        // them instead of stacking on one edge of the gap.
+        let crop = Crop { px: Vec::new(), w: 600, h: 40, x0: 0, top: 10.0, bottom: 50.0 };
+        let chars: Vec<viet::RecChar> = [('a', 0.02, 0.15), (' ', 0.2, 0.2), ('b', 0.25, 0.4), (' ', 0.45, 0.45), ('c', 0.5, 0.65), (' ', 0.7, 0.7), ('d', 0.8, 0.97)]
+            .iter()
+            .map(|&(ch, x0, x1)| viet::RecChar { ch, x0, x1 })
+            .collect();
+        let windows = [piece(10.0, 10.0, 95.0, 50.0, "a"), piece(475.0, 10.0, 590.0, 50.0, "d")];
+        let words = words_from_chars(&crop, &chars, &windows);
+        assert_eq!(texts(&[words.clone()]), ["a b c d"]);
+        for (_, w) in words.iter().map(|w| (w.1.clone(), w.0)) {
+            assert!(w.2 - w.0 >= 60.0, "{words:?}");
+        }
     }
 }
 

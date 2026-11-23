@@ -4,3 +4,5 @@
 /models/**/*.onnx
 /assets/preview/
 /tools/video/out/
+/tools/corpus/web/
+__pycache__/

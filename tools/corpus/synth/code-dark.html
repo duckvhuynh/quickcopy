@@ -1,0 +1,74 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="size" content="1280x760"><meta name="category" content="code-editor">
+<style>
+*{box-sizing:border-box}
+body{margin:0;width:1280px;height:760px;background:#1e1e1e;color:#d4d4d4;font-family:'Segoe UI',Arial,sans-serif;font-size:13px;overflow:hidden;display:grid;grid-template-columns:48px 250px 1fr;grid-template-rows:30px 1fr 24px}
+.title{grid-column:1/4;background:#323233;color:#cccccc;display:flex;align-items:center;justify-content:center;font-size:12px}
+.act{background:#333333}
+.side{background:#252526;padding-top:6px}
+.side .h{font-size:11px;letter-spacing:1px;padding:6px 16px;color:#bbbbbb}
+.f{padding:2px 0 2px 22px;line-height:18px;white-space:nowrap}
+.f.d1{padding-left:36px}.f.d2{padding-left:50px}
+.f.on{background:#37373d;color:#fff}
+.dir{color:#cccccc}.ts{color:#4fc1ff}.json{color:#cbcb41}.md{color:#519aba}
+.main{display:flex;flex-direction:column;min-width:0}
+.tabs{display:flex;background:#252526;height:35px}
+.tab{padding:0 16px;display:flex;align-items:center;color:#969696;border-right:1px solid #1e1e1e}
+.tab.on{background:#1e1e1e;color:#fff}
+.crumb{padding:4px 18px;color:#a9a9a9;font-size:12px}
+.code{font-family:'Cascadia Code',Consolas,monospace;font-size:14px;line-height:21px;padding-top:4px}
+.l{display:flex;white-space:pre}
+.n{width:54px;text-align:right;padding-right:22px;color:#858585;flex:none}
+.k{color:#569cd6}.c{color:#c586c0}.s{color:#ce9178}.t{color:#4ec9b0}.fn{color:#dcdcaa}.v{color:#9cdcfe}.cm{color:#6a9955}.nm{color:#b5cea8}
+.status{grid-column:1/4;background:#007acc;color:#fff;display:flex;gap:18px;align-items:center;padding:0 12px;font-size:12px}
+.status .r{margin-left:auto;display:flex;gap:18px}
+</style></head><body>
+<div class="title" data-expect>invoice-service — src/billing/invoice.ts — Visual Studio Code</div>
+<div class="act"></div>
+<div class="side">
+<div class="h" data-expect>EXPLORER</div>
+<div class="f dir">⌄ <span data-expect>INVOICE-SERVICE</span></div>
+<div class="f d1 dir">⌄ src</div>
+<div class="f d2 dir">› api</div>
+<div class="f d2 dir">⌄ billing</div>
+<div class="f d2 ts on" style="padding-left:64px" data-expect>invoice.ts</div>
+<div class="f d2 ts" style="padding-left:64px" data-expect>tax-rates.ts</div>
+<div class="f d2 ts" style="padding-left:64px" data-expect>currency.ts</div>
+<div class="f d2 dir">› storage</div>
+<div class="f d2 ts" data-expect>server.ts</div>
+<div class="f d1 dir">› tests</div>
+<div class="f d1 json" data-expect>package.json</div>
+<div class="f d1 json" data-expect>tsconfig.json</div>
+<div class="f d1 md" data-expect>README.md</div>
+</div>
+<div class="main">
+<div class="tabs"><div class="tab on">invoice.ts&nbsp;&nbsp;M</div><div class="tab">tax-rates.ts</div><div class="tab">server.ts</div></div>
+<div class="crumb" data-expect>src › billing › invoice.ts › buildInvoice</div>
+<div class="code">
+<div class="l"><span class="n">1</span><span data-expect><span class="c">import</span> { <span class="v">TaxRate</span>, <span class="v">lookupRate</span> } <span class="c">from</span> <span class="s">"./tax-rates"</span>;</span></div>
+<div class="l"><span class="n">2</span><span data-expect><span class="c">import</span> { <span class="v">formatMoney</span> } <span class="c">from</span> <span class="s">"./currency"</span>;</span></div>
+<div class="l"><span class="n">3</span><span></span></div>
+<div class="l"><span class="n">4</span><span class="cm" data-expect>// One line on an invoice, before tax.</span></div>
+<div class="l"><span class="n">5</span><span data-expect><span class="k">export interface</span> <span class="t">LineItem</span> {</span></div>
+<div class="l"><span class="n">6</span><span data-expect>  <span class="v">description</span>: <span class="t">string</span>;</span></div>
+<div class="l"><span class="n">7</span><span data-expect>  <span class="v">quantity</span>: <span class="t">number</span>;</span></div>
+<div class="l"><span class="n">8</span><span data-expect>  <span class="v">unitPriceCents</span>: <span class="t">number</span>;</span></div>
+<div class="l"><span class="n">9</span><span>}</span></div>
+<div class="l"><span class="n">10</span><span></span></div>
+<div class="l"><span class="n">11</span><span data-expect><span class="k">export function</span> <span class="fn">buildInvoice</span>(<span class="v">items</span>: <span class="t">LineItem</span>[], <span class="v">region</span>: <span class="t">string</span>) {</span></div>
+<div class="l"><span class="n">12</span><span data-expect>  <span class="k">const</span> <span class="v">rate</span>: <span class="t">TaxRate</span> = <span class="fn">lookupRate</span>(<span class="v">region</span>);</span></div>
+<div class="l"><span class="n">13</span><span data-expect>  <span class="k">let</span> <span class="v">subtotal</span> = <span class="nm">0</span>;</span></div>
+<div class="l"><span class="n">14</span><span data-expect>  <span class="c">for</span> (<span class="k">const</span> <span class="v">item</span> <span class="k">of</span> <span class="v">items</span>) {</span></div>
+<div class="l"><span class="n">15</span><span data-expect>    <span class="v">subtotal</span> += <span class="v">item</span>.<span class="v">quantity</span> * <span class="v">item</span>.<span class="v">unitPriceCents</span>;</span></div>
+<div class="l"><span class="n">16</span><span>  }</span></div>
+<div class="l"><span class="n">17</span><span data-expect>  <span class="k">const</span> <span class="v">tax</span> = <span class="t">Math</span>.<span class="fn">round</span>(<span class="v">subtotal</span> * <span class="v">rate</span>.<span class="v">percent</span> / <span class="nm">100</span>);</span></div>
+<div class="l"><span class="n">18</span><span data-expect>  <span class="c">if</span> (<span class="v">tax</span> &lt; <span class="nm">0</span>) <span class="c">throw new</span> <span class="t">Error</span>(<span class="s">`negative tax for ${</span><span class="v">region</span><span class="s">}`</span>);</span></div>
+<div class="l"><span class="n">19</span><span data-expect>  <span class="c">return</span> {</span></div>
+<div class="l"><span class="n">20</span><span data-expect>    <span class="v">lines</span>: <span class="v">items</span>.<span class="fn">map</span>((<span class="v">i</span>) =&gt; <span class="fn">formatMoney</span>(<span class="v">i</span>.<span class="v">unitPriceCents</span>)),</span></div>
+<div class="l"><span class="n">21</span><span data-expect>    <span class="v">total</span>: <span class="fn">formatMoney</span>(<span class="v">subtotal</span> + <span class="v">tax</span>),</span></div>
+<div class="l"><span class="n">22</span><span data-expect>    <span class="v">taxLabel</span>: <span class="s">"VAT 8% included"</span>,</span></div>
+<div class="l"><span class="n">23</span><span>  };</span></div>
+<div class="l"><span class="n">24</span><span>}</span></div>
+</div></div>
+<div class="status"><span data-expect>main*</span><span data-expect>0 errors, 2 warnings</span><span class="r"><span data-expect>Ln 17, Col 42</span><span data-expect>Spaces: 2</span><span data-expect>UTF-8</span><span data-expect>TypeScript</span></span></div>
+</body></html>

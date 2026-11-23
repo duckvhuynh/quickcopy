@@ -1,0 +1,41 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="size" content="1100x600"><meta name="category" content="terminal">
+<style>
+*{box-sizing:border-box}
+body{margin:0;width:1100px;height:600px;background:#0c0c0c;color:#cccccc;font-family:'Cascadia Mono',Consolas,monospace;font-size:14px;overflow:hidden}
+.bar{height:34px;background:#202020;display:flex;align-items:stretch;font-family:'Segoe UI',Arial,sans-serif;font-size:12px}
+.tab{background:#0c0c0c;color:#fff;padding:0 18px;display:flex;align-items:center;gap:8px;border-radius:6px 6px 0 0;margin:4px 0 0 8px}
+.tab2{color:#9d9d9d;padding:0 18px;display:flex;align-items:center}
+.out{padding:10px 14px;line-height:21px}
+.out>div{white-space:pre}
+.g{color:#16c60c}.y{color:#f9f1a5}.r{color:#e74856}.b{color:#3b78ff}.c{color:#61d6d6}.m{color:#b4009e}.w{color:#f2f2f2;font-weight:bold}.d{color:#767676}
+.ok{background:#16c60c;color:#0c0c0c;padding:0 4px}.fail{background:#e74856;color:#0c0c0c;padding:0 4px}
+</style></head><body>
+<div class="bar"><div class="tab" data-expect>PowerShell 7.4</div><div class="tab2" data-expect>Ubuntu-22.04</div></div>
+<div class="out"><div data-expect><span class="g">PS D:\shop-api&gt;</span> npm test -- --runInBand</div>
+<div data-expect><span class="d">&gt; shop-api@2.3.0 test</span></div>
+<div data-expect><span class="d">&gt; jest --runInBand</span></div>
+
+<div data-expect><span class="ok">PASS</span> src/cart/cart.test.ts (2.41 s)</div>
+<div data-expect><span class="ok">PASS</span> src/users/session.test.ts</div>
+<div data-expect><span class="fail">FAIL</span> src/orders/checkout.test.ts</div>
+<div data-expect><span class="r">  ● checkout › applies discount code before tax</span></div>
+
+<div data-expect>    expect(received).toBe(expected) <span class="d">// Object.is equality</span></div>
+
+<div data-expect>    Expected: <span class="g">90.5</span></div>
+<div data-expect>    Received: <span class="r">99.55</span></div>
+
+<div data-expect><span class="d">      42 |</span>     const total = checkout(cart, { code: "SPRING10" });</div>
+<div data-expect><span class="r">    &gt; 43 |</span>     expect(total).toBe(90.5);</div>
+
+<div data-expect><span class="w">Tests:</span>       <span class="r">1 failed</span>, <span class="g">37 passed</span>, 38 total</div>
+<div data-expect><span class="w">Time:</span>        6.832 s</div>
+<div data-expect><span class="g">PS D:\shop-api&gt;</span> git log --oneline -4</div>
+<div data-expect><span class="y">a1f9c3e</span> <span class="c">(HEAD -&gt; main, origin/main)</span> Apply discounts after tax</div>
+<div data-expect><span class="y">7b20d4c</span> Add SPRING10 promotion</div>
+<div data-expect><span class="y">e5c81aa</span> <span class="m">(tag: v2.3.0)</span> Bump version to 2.3.0</div>
+<div data-expect><span class="y">0d4f6b2</span> Fix rounding in currency formatter</div>
+<div data-expect><span class="g">PS D:\shop-api&gt;</span> <span class="b">cargo</span> build --release</div>
+<div data-expect><span class="y">warning</span>: unused variable: `retries`</div></div>
+</body></html>

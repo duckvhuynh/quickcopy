@@ -1,0 +1,490 @@
+[
+  {
+    "id": "vi-board-doc-lap",
+    "file": "web/vi-video/vi-board-doc-lap.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:B%E1%BA%A3ng_tuy%C3%AAn_truy%E1%BB%81n,_%C4%91%C6%B0%E1%BB%9Dng_%C4%90%E1%BB%99c_L%E1%BA%ADp,_H%C3%A0_N%E1%BB%99i_002.JPG",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/05/B%E1%BA%A3ng_tuy%C3%AAn_truy%E1%BB%81n%2C_%C4%91%C6%B0%E1%BB%9Dng_%C4%90%E1%BB%99c_L%E1%BA%ADp%2C_H%C3%A0_N%E1%BB%99i_002.JPG/1920px-B%E1%BA%A3ng_tuy%C3%AAn_truy%E1%BB%81n%2C_%C4%91%C6%B0%E1%BB%9Dng_%C4%90%E1%BB%99c_L%E1%BA%ADp%2C_H%C3%A0_N%E1%BB%99i_002.JPG",
+    "license": "CC BY-SA 4.0",
+    "category": "sign-vi-stylized",
+    "lang": "vi",
+    "expect": [
+      "70 năm",
+      "2-9-1945",
+      "2-9-2015",
+      "ĐỘC LẬP",
+      "TỰ DO",
+      "HẠNH PHÚC",
+      "BẢO VỆ"
+    ]
+  },
+  {
+    "id": "vi-board-forest",
+    "file": "web/vi-video/vi-board-forest.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:B%E1%BA%A3ng_tuy%C3%AAn_truy%E1%BB%81n_b%E1%BA%A3o_v%E1%BB%87_r%E1%BB%ABng_B%E1%BA%A3n_Ch%C3%B9a_-_Cam_L%E1%BB%99_-_Qu%E1%BA%A3ng_Tr%E1%BB%8B.jpg",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/03/B%E1%BA%A3ng_tuy%C3%AAn_truy%E1%BB%81n_b%E1%BA%A3o_v%E1%BB%87_r%E1%BB%ABng_B%E1%BA%A3n_Ch%C3%B9a_-_Cam_L%E1%BB%99_-_Qu%E1%BA%A3ng_Tr%E1%BB%8B.jpg/1920px-B%E1%BA%A3ng_tuy%C3%AAn_truy%E1%BB%81n_b%E1%BA%A3o_v%E1%BB%87_r%E1%BB%ABng_B%E1%BA%A3n_Ch%C3%B9a_-_Cam_L%E1%BB%99_-_Qu%E1%BA%A3ng_Tr%E1%BB%8B.jpg",
+    "license": "CC BY-SA 4.0",
+    "category": "sign-vi",
+    "lang": "vi",
+    "expect": [
+      "TOÀN DÂN TÍCH CỰC",
+      "THAM GIA PHÒNG CHÁY,",
+      "CHỮA CHÁY RỪNG"
+    ]
+  },
+  {
+    "id": "vi-sign-zoo",
+    "file": "web/vi-video/vi-sign-zoo.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:V%C6%B0%E1%BB%9Dn_th%C3%BA_Th%E1%BB%A7_L%E1%BB%87_bi%E1%BB%83n_hi%E1%BB%87u_(1).jpg",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/85/V%C6%B0%E1%BB%9Dn_th%C3%BA_Th%E1%BB%A7_L%E1%BB%87_bi%E1%BB%83n_hi%E1%BB%87u_%281%29.jpg/1920px-V%C6%B0%E1%BB%9Dn_th%C3%BA_Th%E1%BB%A7_L%E1%BB%87_bi%E1%BB%83n_hi%E1%BB%87u_%281%29.jpg",
+    "license": "Public domain",
+    "category": "poster-vi-script",
+    "lang": "vi",
+    "expect": [
+      "TNHH MỘT THÀNH VIÊN",
+      "VƯỜN THÚ HÀ NỘI",
+      "Quý Khách"
+    ]
+  },
+  {
+    "id": "vi-sign-toilet-warning",
+    "file": "web/vi-video/vi-sign-toilet-warning.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:Toilet_warning_sign_long_bien_HN.jpg",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/a7/Toilet_warning_sign_long_bien_HN.jpg/1920px-Toilet_warning_sign_long_bien_HN.jpg",
+    "license": "CC BY-SA 4.0",
+    "category": "notice-vi",
+    "lang": "vi",
+    "expect": [
+      "ĐI VỆ SINH XONG NHỚ XẢ NƯỚC",
+      "KHÔNG XẢ NƯỚC RA NỀN NHÀ VỆ SINH",
+      "VỆ SINH CHUNG CHO SẠCH"
+    ]
+  },
+  {
+    "id": "vi-sign-battrang-names",
+    "file": "web/vi-video/vi-sign-battrang-names.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:B%C3%A1t_Tr%C3%A0ng_administrative_division_names_in_Vietnamese_and_English,_Hanoi_(2018).jpg",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/ec/B%C3%A1t_Tr%C3%A0ng_administrative_division_names_in_Vietnamese_and_English%2C_Hanoi_%282018%29.jpg/1920px-B%C3%A1t_Tr%C3%A0ng_administrative_division_names_in_Vietnamese_and_English%2C_Hanoi_%282018%29.jpg",
+    "license": "CC BY-SA 4.0",
+    "category": "sign-vi-en-fr",
+    "lang": "vi",
+    "expect": [
+      "THUỘC HUYỆN",
+      "GIA LÂM TRUYỀN",
+      "THỐNG SỨ, GỐM",
+      "NỔI TIẾNG",
+      "VILLAGE BAT",
+      "TRANG (DISTRICT",
+      "DE GIA LAM) - CONNU",
+      "TRADITIONNEL DE",
+      "ITS TRADITIONAL",
+      "CERAMICS AND",
+      "Điểm dừng, đỗ xe",
+      "Chùa Kim Trúc",
+      "Chùa Tiêu Dao",
+      "Đình Giang Cao"
+    ]
+  },
+  {
+    "id": "vi-shop-jewelry",
+    "file": "web/vi-video/vi-shop-jewelry.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:Juvelvendejo_V%C3%A0ng_B%E1%BA%A1c_Ph%C6%B0%C6%A1ng_An_en_Hanojo.jpg",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/84/Juvelvendejo_V%C3%A0ng_B%E1%BA%A1c_Ph%C6%B0%C6%A1ng_An_en_Hanojo.jpg/1920px-Juvelvendejo_V%C3%A0ng_B%E1%BA%A1c_Ph%C6%B0%C6%A1ng_An_en_Hanojo.jpg",
+    "license": "CC BY-SA 4.0",
+    "category": "shopfront-vi",
+    "lang": "vi",
+    "expect": [
+      "VÀNG BẠC",
+      "PHƯƠNG AN",
+      "Đ/C: 422 MINH KHAI",
+      "HAI BÀ TRƯNG - HÀ NỘI",
+      "TEL: 04.2422058",
+      "DĐ: 098.3834459",
+      "THU MUA",
+      "SẮT VỤN - ĐỒNG - NHÔM"
+    ]
+  },
+  {
+    "id": "vi-poster-covid-5-dieu",
+    "file": "web/vi-video/vi-poster-covid-5-dieu.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:%C3%81p_Ph%C3%ADch_5_%C4%90i%E1%BB%81u_Ng%C6%B0%E1%BB%9Di_D%C3%A2n_C%E1%BA%A7n_L%C3%A0m.jpg",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/e8/%C3%81p_Ph%C3%ADch_5_%C4%90i%E1%BB%81u_Ng%C6%B0%E1%BB%9Di_D%C3%A2n_C%E1%BA%A7n_L%C3%A0m.jpg/1920px-%C3%81p_Ph%C3%ADch_5_%C4%90i%E1%BB%81u_Ng%C6%B0%E1%BB%9Di_D%C3%A2n_C%E1%BA%A7n_L%C3%A0m.jpg",
+    "license": "Public domain",
+    "category": "poster-vi",
+    "lang": "vi",
+    "expect": [
+      "5 ĐIỀU NGƯỜI DÂN CẦN LÀM",
+      "ĐỂ PHÒNG CHỐNG DỊCH COVID-19",
+      "ĐƯỜNG DÂY NÓNG: 19009095 - 19003228",
+      "Hạn chế tối đa",
+      "Giữ khoảng cách,",
+      "đeo khẩu trang",
+      "Rửa tay thường xuyên",
+      "bằng xà phòng",
+      "Vệ sinh nhà cửa",
+      "Khai báo y tế",
+      "Ban chỉ đạo Quốc gia phòng chống dịch bệnh COVID - 19",
+      "đề nghị người dân nghiêm túc thực hiện."
+    ]
+  },
+  {
+    "id": "vi-poster-covid-5k",
+    "file": "web/vi-video/vi-poster-covid-5k.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:%C3%81p_Ph%C3%ADch_5K.jpg",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/e3/%C3%81p_Ph%C3%ADch_5K.jpg/1920px-%C3%81p_Ph%C3%ADch_5K.jpg",
+    "license": "Public domain",
+    "category": "infographic-vi",
+    "lang": "vi",
+    "expect": [
+      "CÔNG TY CỔ PHẦN BẾN XE MIỀN TÂY",
+      "TUYÊN TRUYỀN THÔNG ĐIỆP 5K CỦA BỘ Y TẾ",
+      "trong suốt quá trình vận chuyển",
+      "và xếp, dỡ hàng hóa",
+      "sát khuẩn tay và",
+      "nơi làm việc, nơi ở và",
+      "phương tiện vận chuyển",
+      "Khi có dấu hiệu",
+      "SỐT, HO, KHÓ THỞ gọi",
+      "Đường dây nóng của Bộ Y tế",
+      "hoặc cơ quan y tế địa phương",
+      "https://www.bluezone.gov.vn",
+      "lây nhiễm COVID-19",
+      "y tế trên App NCOVI",
+      "Hãy giữ an toàn cho Bạn và Chúng ta trước Đại dịch COVID-19"
+    ]
+  },
+  {
+    "id": "vi-poster-party-congress",
+    "file": "web/vi-video/vi-poster-party-congress.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:New_year_party_congress_preparations_poster.jpg",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/b/be/New_year_party_congress_preparations_poster.jpg/1920px-New_year_party_congress_preparations_poster.jpg",
+    "license": "CC BY-SA 4.0",
+    "category": "banner-vi-serif",
+    "lang": "vi",
+    "expect": [
+      "BỘ VĂN HOÁ, THỂ THAO VÀ DU LỊCH",
+      "HỘI NGHỆ SỸ SÂN KHẤU VIỆT NAM",
+      "NHIỆT LIỆT CHÀO MỪNG CÁC ĐƠN VỊ THAM GIA",
+      "LIÊN HOAN CÁC TÁC PHẨM SÂN KHẤU TIÊU BIỂU CHÀO MỪNG ĐẠI HỘI",
+      "ĐẠI BIỂU TOÀN QUỐC LẦN THỨ XII CỦA ĐẢNG",
+      "TỪ NGÀY 12 ĐẾN NGÀY 17 THÁNG 01 NĂM 2016 TẠI HÀ NỘI",
+      "CÁCH MẠNG THÁNG TÁM"
+    ]
+  },
+  {
+    "id": "vi-poster-military-museum",
+    "file": "web/vi-video/vi-poster-military-museum.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:Promotional_posters_for_the_Museum_of_Vietnamese_Military_History_in_2014_1.jpg",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/b/ba/Promotional_posters_for_the_Museum_of_Vietnamese_Military_History_in_2014_1.jpg/1920px-Promotional_posters_for_the_Museum_of_Vietnamese_Military_History_in_2014_1.jpg",
+    "license": "CC BY-SA 4.0",
+    "category": "board-vi",
+    "lang": "vi",
+    "expect": [
+      "HÌNH ẢNH HOẠT ĐỘNG QUÂN SỰ",
+      "NHIỆT LIỆT CHÀO MỪNG",
+      "KỶ NIỆM 70 NĂM",
+      "NGÀY THÀNH LẬP",
+      "QUÂN ĐỘI NHÂN DÂN VIỆT NAM",
+      "25 NĂM NGÀY HỘI",
+      "QUỐC PHÒNG TOÀN DÂN",
+      "70 NĂM NGÀY TRUYỀN THỐNG",
+      "TỔNG CỤC CHÍNH TRỊ"
+    ]
+  },
+  {
+    "id": "vid-sub-charade",
+    "file": "web/vi-video/vid-sub-charade.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:Example_of_subtitles_(Charade,_1963).jpg",
+    "download": "https://upload.wikimedia.org/wikipedia/commons/e/eb/Example_of_subtitles_%28Charade%2C_1963%29.jpg",
+    "license": "Public domain",
+    "category": "video-subtitle-en",
+    "lang": "en",
+    "expect": [
+      "Good Lord, where is he?",
+      "What’s the matter, chérie?"
+    ]
+  },
+  {
+    "id": "mix-viwiki-main-2020",
+    "file": "web/vi-video/mix-viwiki-main-2020.png",
+    "source": "https://commons.wikimedia.org/wiki/File:Vietnamese_Wikipedia_main_page_2020.png",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/6c/Vietnamese_Wikipedia_main_page_2020.png/1280px-Vietnamese_Wikipedia_main_page_2020.png",
+    "license": "CC BY-SA 4.0",
+    "category": "web-vi-article",
+    "lang": "vi",
+    "expect": [
+      "Bạn chính là tác giả của Wikipedia!",
+      "Bạn cũng đừng ngại đặt câu hỏi.",
+      "bài viết và 777.891 thành viên.",
+      "Tìm kiếm Wikipedia",
+      "Bài viết chọn lọc",
+      "là một kẻ giết người hàng loạt người Mỹ",
+      "và sát hại nhiều phụ nữ cũng như trẻ em gái trong giai đoạn những năm",
+      "quyết vào năm 1989, anh đã thú nhận mình là thủ phạm của 30 vụ giết",
+      "sống thọ hơn so với những quần thể đồng loại ở Ấn Độ Dương?",
+      "nhất hiện tại, người thứ tư trong lịch sử Trung Quốc?",
+      "một trận hỏa hoạn đã phá hủy 70.000 cổ vật",
+      "Đại dịch COVID-19",
+      "Chưa đăng nhập",
+      "Thay đổi gần đây"
+    ]
+  },
+  {
+    "id": "mix-viwiki-love-lies",
+    "file": "web/vi-video/mix-viwiki-love-lies.png",
+    "source": "https://commons.wikimedia.org/wiki/File:LOVE_LIES_-_Wikipedia_Vietnamese_screenshot.png",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/c/c2/LOVE_LIES_-_Wikipedia_Vietnamese_screenshot.png/1280px-LOVE_LIES_-_Wikipedia_Vietnamese_screenshot.png",
+    "license": "CC BY-SA 4.0",
+    "category": "mixed-en-ui-vi-content",
+    "lang": "vi",
+    "expect": [
+      "vi.wikipedia.org/w/index.php?title=Yêu_vì_tiền,_điên_vì_tình&action=submit",
+      "Rock Dog - Wikipedia",
+      "My dashboard",
+      "Wikimedia Commons",
+      "All Bookmarks",
+      "Type here to search",
+      "Sửa đổi Yêu vì tiền, điên vì tình",
+      "Tìm kiếm trên Wikipedia",
+      "Đây chỉ mới là bản xem trước.",
+      "Thay đổi của bạn vẫn chưa được xuất bản!",
+      "(Hong Kong Film Development Council) hỗ trợ tài chính sản xuất.",
+      "Sau khi tham gia viết kịch bản của bộ phim",
+      "cuộc sống cô độc vô tình phải lòng Lý Vĩ Tổ",
+      "có buổi ra mắt tại liên hoan phim quốc tế Hồng Kông vào ngày 29 tháng 3 năm 2024"
+    ]
+  },
+  {
+    "id": "mix-viwiki-village-pump",
+    "file": "web/vi-video/mix-viwiki-village-pump.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:Screenshot_of_Village_Pump_on_Vietnamese_Wikipedia_(4_June_2024).jpg",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/7/7b/Screenshot_of_Village_Pump_on_Vietnamese_Wikipedia_%284_June_2024%29.jpg/500px-Screenshot_of_Village_Pump_on_Vietnamese_Wikipedia_%284_June_2024%29.jpg",
+    "license": "CC BY-SA 4.0",
+    "category": "mobile-web-vi",
+    "lang": "vi",
+    "expect": [
+      "Wikipedia: Thảo luận",
+      "Trang dự án",
+      "Bình luận mới nhất: 10 phút trước bởi",
+      "trong đề tài Tuần tra Wikidata",
+      "Wikidata: Wikipedia:Thảo luận (Q16503), trang dự",
+      "án Wikimedia dùng để thảo luận các vấn đề chung",
+      "Tên khác: Không có",
+      "Kho lưu",
+      "Thêm đề tài",
+      "thích hợp hơn cho vấn đề của bạn:"
+    ]
+  },
+  {
+    "id": "vid-vi-title-hoa-thanh",
+    "file": "web/vi-video/vid-vi-title-hoa-thanh.png",
+    "source": "https://archive.org/download/iloveyt.net_youtube_hoa-thanh-que-toi-dinh-hong_media_qxeijsqfzvs_001_480p_202501/iLoveYt.net_YouTube_HOA-THANH-QUE-TOI-DINH-HONG_Media_QXeIJSqfzVs_001_480p.ia.mp4#t=11.2",
+    "download": "",
+    "license": "CC0",
+    "category": "video-title-card-vi",
+    "lang": "vi",
+    "expect": [
+      "Hòa Thành quê tôi",
+      "Sáng tác: Nguyễn Đình Hồng",
+      "Biểu diễn: Khánh Hồng"
+    ]
+  },
+  {
+    "id": "vid-vi-voa-panel",
+    "file": "web/vi-video/vid-vi-voa-panel.png",
+    "source": "https://commons.wikimedia.org/wiki/File:Gi%C3%A1o_s%C6%B0_T%C6%B0%E1%BB%9Dng_V%C5%A9_gi%E1%BB%9Bi_thi%E1%BB%87u_c%E1%BB%B1u_T%E1%BB%95ng_tr%C6%B0%E1%BB%9Fng_Th%C6%B0%C6%A1ng_m%E1%BA%A1i_v%C3%A0_K%E1%BB%B9_ngh%E1%BB%87_Nguy%E1%BB%85n_%C4%90%E1%BB%A9c_C%C6%B0%E1%BB%9Dng,_b%C3%AAn_tr%C3%A1i,_c%E1%BB%B1u_T%E1%BB%95ng_tr%C6%B0%E1%BB%9Fng_Kinh_t%E1%BA%BF_Ph%E1%BA%A1m_Kim_Ng%E1%BB%8Dc_v%C3%A0_c%E1%BB%B1u_Th%E1%BB%A9_tr%C6%B0%E1%BB%9Fng_Canh_n%C3%B4ng_Tr%E1%BA%A7n_Quang_Minh.png",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f1/Gi%C3%A1o_s%C6%B0_T%C6%B0%E1%BB%9Dng_V%C5%A9_gi%E1%BB%9Bi_thi%E1%BB%87u_c%E1%BB%B1u_T%E1%BB%95ng_tr%C6%B0%E1%BB%9Fng_Th%C6%B0%C6%A1ng_m%E1%BA%A1i_v%C3%A0_K%E1%BB%B9_ngh%E1%BB%87_Nguy%E1%BB%85n_%C4%90%E1%BB%A9c_C%C6%B0%E1%BB%9Dng%2C_b%C3%AAn_tr%C3%A1i%2C_c%E1%BB%B1u_T%E1%BB%95ng_tr%C6%B0%E1%BB%9Fng_Kinh_t%E1%BA%BF_Ph%E1%BA%A1m_Kim_Ng%E1%BB%8Dc_v%C3%A0_c%E1%BB%B1u_Th%E1%BB%A9_tr%C6%B0%E1%BB%9Fng_Canh_n%C3%B4ng_Tr%E1%BA%A7n_Quang_Minh.png/1280px-thumbnail.png",
+    "license": "Public domain",
+    "category": "video-lecture-nameplates",
+    "lang": "vi",
+    "expect": [
+      "Nguyễn Đức Cường",
+      "Phạm Kim Ngọc",
+      "Commercial Banking Development",
+      "Conclusion"
+    ]
+  },
+  {
+    "id": "vid-vi-title-thang-nam",
+    "file": "web/vi-video/vid-vi-title-thang-nam.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:Th%C3%A1ng_n%C4%83m_hai_ngh%C3%ACn_kh%C3%B4ng_tr%C4%83m_m%C6%B0%E1%BB%9Di_s%C3%A1u.jpg",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/3/33/Th%C3%A1ng_n%C4%83m_hai_ngh%C3%ACn_kh%C3%B4ng_tr%C4%83m_m%C6%B0%E1%BB%9Di_s%C3%A1u.jpg/960px-Th%C3%A1ng_n%C4%83m_hai_ngh%C3%ACn_kh%C3%B4ng_tr%C4%83m_m%C6%B0%E1%BB%9Di_s%C3%A1u.jpg",
+    "license": "CC BY-SA 4.0",
+    "category": "video-stylized-3d-text",
+    "lang": "vi",
+    "expect": [
+      "Facebook.com/bacminhgo"
+    ]
+  },
+  {
+    "id": "vid-vi-news-lower-third",
+    "file": "web/vi-video/vid-vi-news-lower-third.png",
+    "source": "https://archive.org/download/ban-tin-van-hoa-giao-thong-08-06-2014/www.ssvid.net--B%E1%BA%A3n-tin-V%C4%83n-h%C3%B3a-giao-th%C3%B4ng-08-06-2014.mp4#t=121.9",
+    "download": "",
+    "license": "unknown (archive.org upload)",
+    "category": "video-lower-third-vi-sd",
+    "lang": "vi",
+    "expect": [
+      "Mạnh Dũng",
+      "PHÓ CHỦ TỊCH UBND PHƯỜNG NGÃ TƯ SỞ - ĐỐNG ĐA"
+    ]
+  },
+  {
+    "id": "vid-vi-news-infographic",
+    "file": "web/vi-video/vid-vi-news-infographic.png",
+    "source": "https://archive.org/download/ban-tin-van-hoa-giao-thong-08-06-2014/www.ssvid.net--B%E1%BA%A3n-tin-V%C4%83n-h%C3%B3a-giao-th%C3%B4ng-08-06-2014.mp4#t=311.4",
+    "download": "",
+    "license": "unknown (archive.org upload)",
+    "category": "video-news-ticker-vi-sd",
+    "lang": "vi",
+    "expect": [
+      "CÓ DẤU HỢP QUY CR",
+      "Có nhãn ghi rõ",
+      "hiểm cho người đi mô tô, xe gắn máy bị xử phạt từ 100.000 đến 200.000 đồng"
+    ]
+  },
+  {
+    "id": "vid-vi-news-caption",
+    "file": "web/vi-video/vid-vi-news-caption.png",
+    "source": "https://archive.org/download/vtc-14-xam-chiem-hoang-sa-1974-trung-quoc-coi-thuong-cong-phap-quoc-te-468p-25fps-h-264-128kbit-aac/VTC14_X%C3%A2m%20chi%E1%BA%BFm%20Ho%C3%A0ng%20Sa%201974%20-%20Trung%20Qu%E1%BB%91c%20coi%20th%C6%B0%E1%BB%9Dng%20c%C3%B4ng%20ph%C3%A1p%20qu%E1%BB%91c%20t%E1%BA%BF%20%28468p_25fps_H264-128kbit_AAC%29.ia.mp4#t=143.2",
+    "download": "",
+    "license": "unknown (archive.org upload)",
+    "category": "video-caption-vi",
+    "lang": "vi",
+    "expect": [
+      "Bia chủ quyền Việt Nam dựng trên đảo Trường Sa, quần đảo Trường Sa (1961)"
+    ]
+  },
+  {
+    "id": "vid-vi-news-anchor",
+    "file": "web/vi-video/vid-vi-news-anchor.png",
+    "source": "https://archive.org/download/vtc-14-xam-chiem-hoang-sa-1974-trung-quoc-coi-thuong-cong-phap-quoc-te-468p-25fps-h-264-128kbit-aac/VTC14_X%C3%A2m%20chi%E1%BA%BFm%20Ho%C3%A0ng%20Sa%201974%20-%20Trung%20Qu%E1%BB%91c%20coi%20th%C6%B0%E1%BB%9Dng%20c%C3%B4ng%20ph%C3%A1p%20qu%E1%BB%91c%20t%E1%BA%BF%20%28468p_25fps_H264-128kbit_AAC%29.ia.mp4#t=13.0",
+    "download": "",
+    "license": "unknown (archive.org upload)",
+    "category": "video-title-stylized-vi",
+    "lang": "vi",
+    "expect": [
+      "Nhật ký",
+      "cuộc sống"
+    ]
+  },
+  {
+    "id": "vid-vi-sub-dark",
+    "file": "web/vi-video/vid-vi-sub-dark.png",
+    "source": "https://archive.org/download/hmh-webdrama/Webdrama%20BTS_arc.mp4#t=750.2",
+    "download": "",
+    "license": "unknown (archive.org upload)",
+    "category": "video-subtitle-vi",
+    "lang": "vi",
+    "expect": [
+      "Cả một đêm dài, chẳng lẽ chúng ta không đi toilet à?"
+    ]
+  },
+  {
+    "id": "vid-vi-sub-stylized",
+    "file": "web/vi-video/vid-vi-sub-stylized.png",
+    "source": "https://archive.org/download/hmh-webdrama/Webdrama%20BTS_arc.mp4#t=118.5",
+    "download": "",
+    "license": "unknown (archive.org upload)",
+    "category": "video-subtitle-vi-stylized",
+    "lang": "vi",
+    "expect": [
+      "Em không lạnh",
+      "em chỉ đang nhúc nhích"
+    ]
+  },
+  {
+    "id": "vid-vi-sub-bilingual",
+    "file": "web/vi-video/vid-vi-sub-bilingual.png",
+    "source": "https://archive.org/download/hmh-webdrama/Webdrama%20BTS_arc.mp4#t=513.3",
+    "download": "",
+    "license": "unknown (archive.org upload)",
+    "category": "video-subtitle-vi",
+    "lang": "vi",
+    "expect": [
+      "Cả câu chuyện của vụ án này nhé"
+    ]
+  },
+  {
+    "id": "vid-en-lecture-bullets",
+    "file": "web/vi-video/vid-en-lecture-bullets.png",
+    "source": "https://video.fosdem.org/2024/janson/fosdem-2024-2151-alexandria3k-researching-the-world-s-knowledge-on-your-laptop.mp4#t=2179.7",
+    "download": "",
+    "license": "CC BY 2.0 BE",
+    "category": "video-lecture-slide",
+    "lang": "en",
+    "expect": [
+      "Way forward",
+      "Help community to conduct studies",
+      "Integrate more OA data",
+      "arXiv, DBLP, MESH, PLoS taxonomy, …",
+      "Improve processes",
+      "Author & org disambiguation, topic classification, …",
+      "Evangelize more and better data availability",
+      "ORCID",
+      "Publication metadata improvements"
+    ]
+  },
+  {
+    "id": "vid-en-lecture-table",
+    "file": "web/vi-video/vid-en-lecture-table.png",
+    "source": "https://video.fosdem.org/2024/janson/fosdem-2024-2151-alexandria3k-researching-the-world-s-knowledge-on-your-laptop.mp4#t=311.4",
+    "download": "",
+    "license": "CC BY 2.0 BE",
+    "category": "video-lecture-table",
+    "lang": "en",
+    "expect": [
+      "Raspberry Pi Zero",
+      "Instruction cycle time",
+      "10.71–0.918 ms (93-1089 Hz)",
+      "1 ns (1 GHz clock)",
+      "512 MB LPDDR2 SDRAM",
+      "1280 bytes (nickel delay lines)",
+      "32 kB (16 kB I + 16kB D L1 cache)",
+      "1.2 MB (300,000 word magnetic film)",
+      "8 GB (typical micro SD flash card)",
+      "373 MB/s (1080p60 HDMI)",
+      "21 cabinets, each 2m x 77cm x 77cm",
+      "65mm x 30mm x 5.4mm",
+      "Operating power"
+    ]
+  },
+  {
+    "id": "vid-en-lecture-sql",
+    "file": "web/vi-video/vid-en-lecture-sql.png",
+    "source": "https://video.fosdem.org/2024/janson/fosdem-2024-2151-alexandria3k-researching-the-world-s-knowledge-on-your-laptop.mp4#t=1972.1",
+    "download": "",
+    "license": "CC BY 2.0 BE",
+    "category": "video-lecture-code",
+    "lang": "en",
+    "expect": [
+      "Conditional Crossref population 2/2",
+      "CREATE TEMP TABLE temp_matched AS",
+      "SELECT works.id, works.rowid",
+      "LEFT JOIN temp_work_subjects AS work_subjects",
+      "WHERE (work_subjects.name = 'Library and Information Sciences');",
+      "INSERT INTO populated.work_authors",
+      "WHERE work_authors.container_id = 0",
+      "ON temp_works.id = temp_work_authors.work_id",
+      "AND work_authors.rowid = temp_work_authors.rowid);",
+      "Key to all partition",
+      "ordered table JOINs",
+      "partition’s data based on"
+    ]
+  },
+  {
+    "id": "vi-sign-swing-bilingual",
+    "file": "web/vi-video/vi-sign-swing-bilingual.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:Vietnamese_sign.jpg",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/2/2b/Vietnamese_sign.jpg/1280px-Vietnamese_sign.jpg",
+    "license": "CC BY-SA 4.0",
+    "category": "sign-vi-en",
+    "lang": "vi",
+    "expect": [
+      "ĐỂ ĐẢM BẢO AN TOÀN QUÝ",
+      "KHÁCH VUI LÒNG KHÔNG ĐU XÍCH",
+      "ĐU CAO QUÁ 0.8M",
+      "TO GUARANTEE YOUR SAFETY PLEASE",
+      "NOT SUCHING OVER 0.8M"
+    ]
+  }
+]
