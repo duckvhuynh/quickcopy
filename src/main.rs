@@ -12,6 +12,7 @@
 mod i18n;
 mod languages;
 mod layout;
+mod menu;
 mod paint;
 mod popover;
 mod rectfind;
@@ -335,10 +336,14 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             });
             LRESULT(0)
         }
+        WM_COMMAND => {
+            tray_command(hwnd, wp.0 & 0xFFFF);
+            LRESULT(0)
+        }
         WM_APP_TRAY => {
             let event = (lp.0 & 0xFFFF) as u32;
             if event == WM_RBUTTONUP || event == WM_CONTEXTMENU {
-                unsafe { tray_menu(hwnd) };
+                tray_menu(hwnd);
             }
             LRESULT(0)
         }
@@ -1325,34 +1330,38 @@ fn remove_tray_icon(main: HWND) {
     }
 }
 
-/// Shows the tray menu. Runs a modal loop, so it must not hold the app borrow.
-unsafe fn tray_menu(main: HWND) {
+/// Shows the tray menu (menu.rs); picks come back as WM_COMMAND.
+fn tray_menu(main: HWND) {
     let paused = with_app(|app| app.paused).unwrap_or(false);
+    let t = i18n::t();
+    let mut at = POINT::default();
     unsafe {
-        let Ok(menu) = CreatePopupMenu() else { return };
-        let t = i18n::t();
-        let pause_flags = if paused { MF_STRING | MF_CHECKED } else { MF_STRING };
-        let _ = AppendMenuW(menu, MF_STRING, MENU_SETTINGS, &HSTRING::from(t.settings));
-        let _ = AppendMenuW(menu, pause_flags, MENU_PAUSE, &HSTRING::from(t.pause));
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, &HSTRING::from(t.quit));
-        let mut pt = POINT::default();
-        let _ = GetCursorPos(&mut pt);
-        let _ = SetForegroundWindow(main);
-        let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, None, main, None);
-        let _ = DestroyMenu(menu);
-        match cmd.0 as usize {
-            MENU_PAUSE => {
-                with_app(|app| {
-                    app.paused = !app.paused;
-                    if app.paused {
-                        hide(app);
-                    }
-                });
-            }
-            MENU_SETTINGS => settings_ui::open(main),
-            MENU_QUIT => PostQuitMessage(0),
-            _ => {}
+        let _ = GetCursorPos(&mut at);
+    }
+    menu::show(
+        main,
+        at,
+        vec![
+            menu::Entry { label: t.settings.into(), id: MENU_SETTINGS, checked: false, separator: false },
+            menu::Entry { label: t.pause.into(), id: MENU_PAUSE, checked: paused, separator: false },
+            menu::Entry { label: t.quit.into(), id: MENU_QUIT, checked: false, separator: true },
+        ],
+    );
+}
+
+/// A tray menu pick.
+fn tray_command(main: HWND, id: usize) {
+    match id {
+        MENU_SETTINGS => settings_ui::open(main),
+        MENU_PAUSE => {
+            with_app(|app| {
+                app.paused = !app.paused;
+                if app.paused {
+                    hide(app);
+                }
+            });
         }
+        MENU_QUIT => unsafe { PostQuitMessage(0) },
+        _ => {}
     }
 }

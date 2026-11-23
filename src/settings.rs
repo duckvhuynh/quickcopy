@@ -210,5 +210,9 @@ mod tests {
         for code in ["vi", "en", "ja", "zh-CN", "fr"] {
             assert!(EN.iter().any(|(c, _)| *c == code) && VI.iter().any(|(c, _)| *c == code), "{code}");
         }
+        // Every Vietnamese name has exactly one "Tiếng", at the start.
+        for (_, name) in VI {
+            assert!(name.starts_with("Tiếng ") && name.to_lowercase().matches("tiếng").count() == 1, "{name}");
+        }
     }
 }

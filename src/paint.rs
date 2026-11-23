@@ -8,7 +8,8 @@
 use std::cell::OnceCell;
 use std::ffi::c_void;
 
-use windows::Win32::Foundation::RECT;
+use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT, SIZE};
+use windows::Win32::UI::WindowsAndMessaging::{UpdateLayeredWindow, ULW_ALPHA};
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectWrite::*;
@@ -235,4 +236,61 @@ pub fn draw(dc: HDC, w: i32, h: i32, boxes: &[DrawBox]) -> Result<()> {
         target.EndDraw(None, None)
     })
     .unwrap_or_else(|| Err(Error::from_hresult(windows::Win32::Foundation::E_FAIL)))
+}
+
+/// Paints a layered window: a transparent `w` x `h` bitmap that `draw` fills
+/// with Direct2D, shown at `pos`. Used by the popover and the tray menu.
+pub(crate) fn update_layered(hwnd: HWND, pos: POINT, w: i32, h: i32, draw: impl FnOnce(&ID2D1DCRenderTarget, &Factories) -> Result<()>) {
+    unsafe {
+        let screen = GetDC(None);
+        let mem = CreateCompatibleDC(Some(screen));
+        let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: w,
+                biHeight: -h,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits: *mut c_void = std::ptr::null_mut();
+        if let Ok(dib) = CreateDIBSection(Some(mem), &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
+            let old = SelectObject(mem, dib.into());
+            std::slice::from_raw_parts_mut(bits as *mut u32, (w * h) as usize).fill(0);
+            let drawn = with_factories(|f| -> Result<()> {
+                let target = dc_target(&f.d2d, mem, w, h)?;
+                target.BeginDraw();
+                target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+                draw(&target, f)?;
+                target.EndDraw(None, None)
+            });
+            if let Some(Err(e)) = drawn {
+                crate::worker::log(format!("drawing a layered window failed: {e}"));
+            }
+            let size = SIZE { cx: w, cy: h };
+            let src = POINT::default();
+            let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: AC_SRC_ALPHA as u8 };
+            let _ = UpdateLayeredWindow(hwnd, Some(screen), Some(&pos), Some(&size), Some(mem), Some(&src), COLORREF(0), Some(&blend), ULW_ALPHA);
+            SelectObject(mem, old);
+            let _ = DeleteObject(dib.into());
+        }
+        let _ = DeleteDC(mem);
+        ReleaseDC(None, screen);
+    }
+}
+
+/// The rounded, bordered dark panel the popover and the tray menu sit on.
+pub(crate) fn panel(target: &ID2D1DCRenderTarget, r: D2D_RECT_F, s: f32) -> Result<()> {
+    use crate::theme;
+    let radius = theme::RADIUS * s;
+    let rounded = |r: D2D_RECT_F| D2D1_ROUNDED_RECT { rect: r, radiusX: radius, radiusY: radius };
+    unsafe {
+        target.FillRoundedRectangle(&rounded(r), &target.CreateSolidColorBrush(&rgba(theme::PANEL, 0.98), None)?);
+        let edge = D2D_RECT_F { left: r.left + 0.5, top: r.top + 0.5, right: r.right - 0.5, bottom: r.bottom - 0.5 };
+        target.DrawRoundedRectangle(&rounded(edge), &target.CreateSolidColorBrush(&rgba(theme::BORDER.0, theme::BORDER.1), None)?, 1.0, None);
+    }
+    Ok(())
 }

@@ -3,7 +3,6 @@
 //! focus (the overlay keeps it, so the shortcuts keep working), drawn with
 //! Direct2D in the app's dark theme (theme.rs) and scaled to the monitor.
 
-use std::ffi::c_void;
 
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -12,7 +11,6 @@ use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::*;
 use windows_numerics::Vector2;
 
 use crate::{paint, theme};
@@ -210,83 +208,36 @@ impl Popover {
     }
 
     fn render(&self, pos: POINT) {
-        let (w, h) = (self.size.cx, self.size.cy);
         let s = self.scale;
-        unsafe {
-            let screen = GetDC(None);
-            let mem = CreateCompatibleDC(Some(screen));
-            let bmi = BITMAPINFO {
-                bmiHeader: BITMAPINFOHEADER {
-                    biSize: size_of::<BITMAPINFOHEADER>() as u32,
-                    biWidth: w,
-                    biHeight: -h,
-                    biPlanes: 1,
-                    biBitCount: 32,
-                    biCompression: BI_RGB.0,
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            let mut bits: *mut c_void = std::ptr::null_mut();
-            if let Ok(dib) = CreateDIBSection(Some(mem), &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
-                let old = SelectObject(mem, dib.into());
-                std::slice::from_raw_parts_mut(bits as *mut u32, (w * h) as usize).fill(0);
-                let drawn = paint::with_factories(|f| -> Result<()> {
-                    let target = paint::dc_target(&f.d2d, mem, w, h)?;
-                    target.BeginDraw();
-                    target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-                    let radius = theme::RADIUS * s;
-                    let rounded = |r: D2D_RECT_F, k: f32| D2D1_ROUNDED_RECT { rect: r, radiusX: k, radiusY: k };
-                    let background = target.CreateSolidColorBrush(&paint::rgba(theme::PANEL, 0.98), None)?;
-                    target.FillRoundedRectangle(&rounded(self.panel, radius), &background);
-                    let border = target.CreateSolidColorBrush(&paint::rgba(theme::BORDER.0, theme::BORDER.1), None)?;
-                    let edge = D2D_RECT_F {
-                        left: self.panel.left + 0.5,
-                        top: self.panel.top + 0.5,
-                        right: self.panel.right - 0.5,
-                        bottom: self.panel.bottom - 0.5,
-                    };
-                    target.DrawRoundedRectangle(&rounded(edge, radius), &border, 1.0, None);
-
-                    let text = target.CreateSolidColorBrush(&paint::rgba(theme::TEXT, 1.0), None)?;
-                    let hint = target.CreateSolidColorBrush(&paint::rgba(theme::SUBTLE, 1.0), None)?;
-                    let hover = target.CreateSolidColorBrush(&paint::rgba(theme::HOVER.0, theme::HOVER.1), None)?;
-                    let separator = target.CreateSolidColorBrush(&paint::rgba(theme::SEPARATOR.0, theme::SEPARATOR.1), None)?;
-                    for (i, (item, b)) in self.items.iter().zip(&self.buttons).enumerate() {
-                        if self.hover == Some(i) {
-                            target.FillRoundedRectangle(&rounded(*b, theme::HOVER_RADIUS * s), &hover);
-                        }
-                        if i > 0 {
-                            let x = b.left - 1.0;
-                            target.FillRectangle(&D2D_RECT_F { left: x, top: b.top + 6.0 * s, right: x + 1.0, bottom: b.bottom - 6.0 * s }, &separator);
-                        }
-                        let label = paint::text_layout(&f.dwrite, item.label, LABEL_PX * s, 400)?;
-                        let hint_layout = paint::text_layout(&f.dwrite, &item.hint, HINT_PX * s, 400)?;
-                        let mut lm = DWRITE_TEXT_METRICS::default();
-                        label.GetMetrics(&mut lm)?;
-                        let mut hm = DWRITE_TEXT_METRICS::default();
-                        hint_layout.GetMetrics(&mut hm)?;
-                        let mid = (b.top + b.bottom) / 2.0;
-                        let x = b.left + PAD * s;
-                        target.DrawTextLayout(Vector2 { X: x, Y: mid - lm.height / 2.0 }, &label, &text, D2D1_DRAW_TEXT_OPTIONS_NONE);
-                        let hx = x + lm.widthIncludingTrailingWhitespace + GAP * s;
-                        target.DrawTextLayout(Vector2 { X: hx, Y: mid - hm.height / 2.0 }, &hint_layout, &hint, D2D1_DRAW_TEXT_OPTIONS_NONE);
-                    }
-                    target.EndDraw(None, None)
-                });
-                if let Some(Err(e)) = drawn {
-                    crate::worker::log(format!("drawing popover failed: {e}"));
+        paint::update_layered(self.hwnd, pos, self.size.cx, self.size.cy, |target, f| unsafe {
+            paint::panel(target, self.panel, s)?;
+            let rounded = |r: D2D_RECT_F, k: f32| D2D1_ROUNDED_RECT { rect: r, radiusX: k, radiusY: k };
+            let text = target.CreateSolidColorBrush(&paint::rgba(theme::TEXT, 1.0), None)?;
+            let hint = target.CreateSolidColorBrush(&paint::rgba(theme::SUBTLE, 1.0), None)?;
+            let hover = target.CreateSolidColorBrush(&paint::rgba(theme::HOVER.0, theme::HOVER.1), None)?;
+            let separator = target.CreateSolidColorBrush(&paint::rgba(theme::SEPARATOR.0, theme::SEPARATOR.1), None)?;
+            for (i, (item, b)) in self.items.iter().zip(&self.buttons).enumerate() {
+                if self.hover == Some(i) {
+                    target.FillRoundedRectangle(&rounded(*b, theme::HOVER_RADIUS * s), &hover);
                 }
-                let size = SIZE { cx: w, cy: h };
-                let src = POINT::default();
-                let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: AC_SRC_ALPHA as u8 };
-                let _ = UpdateLayeredWindow(self.hwnd, Some(screen), Some(&pos), Some(&size), Some(mem), Some(&src), COLORREF(0), Some(&blend), ULW_ALPHA);
-                SelectObject(mem, old);
-                let _ = DeleteObject(dib.into());
+                if i > 0 {
+                    let x = b.left - 1.0;
+                    target.FillRectangle(&D2D_RECT_F { left: x, top: b.top + 6.0 * s, right: x + 1.0, bottom: b.bottom - 6.0 * s }, &separator);
+                }
+                let label = paint::text_layout(&f.dwrite, item.label, LABEL_PX * s, 400)?;
+                let hint_layout = paint::text_layout(&f.dwrite, &item.hint, HINT_PX * s, 400)?;
+                let mut lm = DWRITE_TEXT_METRICS::default();
+                label.GetMetrics(&mut lm)?;
+                let mut hm = DWRITE_TEXT_METRICS::default();
+                hint_layout.GetMetrics(&mut hm)?;
+                let mid = (b.top + b.bottom) / 2.0;
+                let x = b.left + PAD * s;
+                target.DrawTextLayout(Vector2 { X: x, Y: mid - lm.height / 2.0 }, &label, &text, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                let hx = x + lm.widthIncludingTrailingWhitespace + GAP * s;
+                target.DrawTextLayout(Vector2 { X: hx, Y: mid - hm.height / 2.0 }, &hint_layout, &hint, D2D1_DRAW_TEXT_OPTIONS_NONE);
             }
-            let _ = DeleteDC(mem);
-            ReleaseDC(None, screen);
-        }
+            Ok(())
+        });
     }
 }
 

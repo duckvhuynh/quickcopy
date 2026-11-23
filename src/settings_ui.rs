@@ -1,6 +1,7 @@
-//! The settings window: one dark card of rows, drawn with Direct2D in the
-//! same style as the selection popover (panel, border, radius, padding).
-//! Choosing the translate-into language swaps the card for a searchable list.
+//! The settings window: dark rows on the panel color, drawn with Direct2D in
+//! the same style as the selection popover. The title bar takes the same
+//! color and keeps only a close button, which hides the window to the tray.
+//! Choosing the translate-into language swaps the rows for a searchable list.
 
 use std::cell::RefCell;
 
@@ -24,9 +25,13 @@ use crate::{paint, theme};
 /// Posted to the main window after a setting changed, so it can apply it.
 pub const WM_APP_SETTINGS_CHANGED: u32 = WM_APP + 20;
 
-const W: f32 = 440.0;
+const W: f32 = 420.0;
+/// Space between the window edges and the content.
 const PAD: f32 = 16.0;
+/// Gap under the title bar.
+const TOP: f32 = 4.0;
 const ROW_H: f32 = 44.0;
+const FOOTER_H: f32 = 34.0;
 const ROWS: usize = 5;
 const CONTROL_W: f32 = 200.0;
 const CONTROL_H: f32 = 28.0;
@@ -75,14 +80,21 @@ fn scale(hwnd: HWND) -> f32 {
 }
 
 fn client_h() -> f32 {
-    PAD + ROWS as f32 * ROW_H + PAD + 18.0 + PAD
+    TOP + ROWS as f32 * ROW_H + FOOTER_H
 }
 
 /// Opens the settings window, or brings it to the front.
 pub fn open(main: HWND) {
-    if let Some(hwnd) = with_ui(|ui| ui.hwnd) {
+    if let Some(hwnd) = with_ui(|ui| {
+        ui.mode = Mode::Rows;
+        ui.capturing = false;
+        ui.error = None;
+        let _ = unsafe { SetWindowTextW(ui.hwnd, &HSTRING::from(title())) };
+        invalidate(ui);
+        ui.hwnd
+    }) {
         unsafe {
-            let _ = ShowWindow(hwnd, SW_RESTORE);
+            let _ = ShowWindow(hwnd, SW_SHOW);
             let _ = SetForegroundWindow(hwnd);
         }
         return;
@@ -95,10 +107,11 @@ pub fn open(main: HWND) {
             hInstance: instance.into(),
             lpszClassName: class,
             hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-            hbrBackground: CreateSolidBrush(COLORREF(rgb(theme::WINDOW))),
+            hbrBackground: CreateSolidBrush(COLORREF(rgb(theme::PANEL))),
             ..Default::default()
         });
-        let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+        // Caption with only the close button (no minimize or maximize).
+        let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
         let Ok(hwnd) = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             class,
@@ -115,11 +128,14 @@ pub fn open(main: HWND) {
         ) else {
             return;
         };
-        // Dark title bar and border matching the window.
+        // Dark title bar in the panel color, so the window's own border is
+        // the only one.
         let on: BOOL = TRUE;
         let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, (&on as *const BOOL).cast(), size_of::<BOOL>() as u32);
-        let caption = COLORREF(rgb(theme::WINDOW));
+        let caption = COLORREF(rgb(theme::PANEL));
         let _ = DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, (&caption as *const COLORREF).cast(), size_of::<COLORREF>() as u32);
+        let border = COLORREF(rgb(theme::WINDOW_BORDER));
+        let _ = DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, (&border as *const COLORREF).cast(), size_of::<COLORREF>() as u32);
 
         // Size the client area for this monitor's scale, centered on it.
         let s = scale(hwnd);
@@ -146,7 +162,7 @@ pub fn open(main: HWND) {
 }
 
 fn title() -> String {
-    format!("QuickCopy — {}", i18n::t().settings.trim_end_matches('…'))
+    format!("QuickCopy - {}", i18n::t().settings.trim_end_matches('…'))
 }
 
 fn rgb(c: [u8; 3]) -> u32 {
@@ -156,7 +172,8 @@ fn rgb(c: [u8; 3]) -> u32 {
 /// Rects of everything clickable, in client pixels.
 struct Layout {
     s: f32,
-    card: D2D_RECT_F,
+    /// The rows' area, full width (also where the language list goes).
+    body: D2D_RECT_F,
     rows: [D2D_RECT_F; ROWS],
     start_toggle: D2D_RECT_F,
     language: D2D_RECT_F,
@@ -170,18 +187,18 @@ struct Layout {
 
 fn layout(hwnd: HWND) -> Layout {
     let s = scale(hwnd);
-    let card = D2D_RECT_F { left: PAD * s, top: PAD * s, right: (W - PAD) * s, bottom: (PAD + ROWS as f32 * ROW_H) * s };
+    let body = D2D_RECT_F { left: 0.0, top: TOP * s, right: W * s, bottom: (TOP + ROWS as f32 * ROW_H) * s };
     let rows: [D2D_RECT_F; ROWS] = std::array::from_fn(|i| D2D_RECT_F {
-        left: card.left,
-        top: card.top + i as f32 * ROW_H * s,
-        right: card.right,
-        bottom: card.top + (i + 1) as f32 * ROW_H * s,
+        left: body.left,
+        top: body.top + i as f32 * ROW_H * s,
+        right: body.right,
+        bottom: body.top + (i + 1) as f32 * ROW_H * s,
     });
     // A control at the right of a row, vertically centered.
     let control = |row: &D2D_RECT_F, w: f32| D2D_RECT_F {
-        left: row.right - (12.0 + w) * s,
+        left: row.right - (PAD + w) * s,
         top: (row.top + row.bottom) / 2.0 - CONTROL_H * s / 2.0,
-        right: row.right - 12.0 * s,
+        right: row.right - PAD * s,
         bottom: (row.top + row.bottom) / 2.0 + CONTROL_H * s / 2.0,
     };
     let toggle = |row: &D2D_RECT_F| {
@@ -190,10 +207,10 @@ fn layout(hwnd: HWND) -> Layout {
     };
     let ui = control(&rows[3], CONTROL_W);
     let mid = (ui.left + ui.right) / 2.0;
-    let search = D2D_RECT_F { left: card.left + 8.0 * s, top: card.top + 8.0 * s, right: card.right - 8.0 * s, bottom: card.top + (8.0 + 30.0) * s };
+    let search = D2D_RECT_F { left: PAD * s, top: body.top + 6.0 * s, right: body.right - PAD * s, bottom: body.top + (6.0 + 30.0) * s };
     Layout {
         s,
-        card,
+        body,
         start_toggle: toggle(&rows[0]),
         language: control(&rows[1], CONTROL_W),
         shortcut: control(&rows[2], CONTROL_W),
@@ -201,7 +218,7 @@ fn layout(hwnd: HWND) -> Layout {
         ui_vi: D2D_RECT_F { left: mid, ..ui },
         ocr_toggle: toggle(&rows[4]),
         search,
-        list: D2D_RECT_F { left: card.left + 4.0 * s, top: search.bottom + 6.0 * s, right: card.right - 4.0 * s, bottom: card.bottom - 4.0 * s },
+        list: D2D_RECT_F { left: (PAD - 6.0) * s, top: search.bottom + 6.0 * s, right: body.right - (PAD - 6.0) * s, bottom: body.bottom },
         rows,
     }
 }
@@ -484,16 +501,15 @@ fn paint(ui: &mut Ui) -> Result<()> {
         unsafe {
             target.BeginDraw();
             target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-            target.Clear(Some(&paint::rgba(theme::WINDOW, 1.0)));
+            target.Clear(Some(&paint::rgba(theme::PANEL, 1.0)));
         }
-        pen.rounded(l.card, theme::RADIUS, Some((theme::PANEL, 1.0)), Some((theme::BORDER.0, theme::BORDER.1)))?;
         let hover = |h: Hit| ui.hover == h;
-        let row_text = |i: usize| D2D_RECT_F { left: l.rows[i].left + 14.0 * l.s, ..l.rows[i] };
+        let row_text = |i: usize| D2D_RECT_F { left: l.rows[i].left + PAD * l.s, ..l.rows[i] };
 
         match &ui.mode {
             Mode::Rows => {
                 for row in &l.rows[1..] {
-                    let line = D2D_RECT_F { left: row.left + 12.0 * l.s, right: row.right - 12.0 * l.s, top: row.top, bottom: row.top + 1.0 };
+                    let line = D2D_RECT_F { left: row.left + PAD * l.s, right: row.right - PAD * l.s, top: row.top, bottom: row.top + 1.0 };
                     unsafe { target.FillRectangle(&line, &pen.brush(theme::SEPARATOR.0, theme::SEPARATOR.1)?) };
                 }
                 // Start with Windows
@@ -590,7 +606,7 @@ fn paint(ui: &mut Ui) -> Result<()> {
             }
         }
         // Footer
-        let footer = D2D_RECT_F { left: l.card.left + 2.0 * l.s, top: l.card.bottom + 8.0 * l.s, right: l.card.right, bottom: l.card.bottom + 28.0 * l.s };
+        let footer = D2D_RECT_F { left: PAD * l.s, top: l.body.bottom, right: l.body.right - PAD * l.s, bottom: l.body.bottom + FOOTER_H * l.s };
         let hint = match ui.mode {
             Mode::Rows => format!("QuickCopy {}", env!("CARGO_PKG_VERSION")),
             Mode::Picker { .. } => "↑ ↓ Enter · Esc".to_string(),
@@ -678,6 +694,13 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         }
         WM_SIZE => {
             with_ui(|ui| ui.target = None);
+            LRESULT(0)
+        }
+        // The close button hides the window to the tray; Quit is in the tray menu.
+        WM_CLOSE => {
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+            }
             LRESULT(0)
         }
         WM_DESTROY => {

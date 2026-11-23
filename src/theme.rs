@@ -18,3 +18,6 @@ pub const RADIUS: f32 = 6.0;
 pub const CONTROL_RADIUS: f32 = 5.0;
 /// Hover highlights inside a panel.
 pub const HOVER_RADIUS: f32 = 4.0;
+
+/// Window outline (the panel color, a little lighter).
+pub const WINDOW_BORDER: Rgb = [66, 66, 66];
