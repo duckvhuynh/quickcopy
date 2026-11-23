@@ -27,9 +27,11 @@ Google, only when you ask. It uses the endpoint and public key of the Google
 Translate web client (not an official API; it may change). Set
 `QC_GOOGLE_KEY` to use your own key.
 
-- ~330 KB executable, no GPU, ~3 MB RAM idle (~90 MB while the Vietnamese
-  model is loaded; it unloads after 5 idle minutes).
-- Rust + Win32, no UI framework. Runs in the tray (Pause, Vietnamese toggle, Quit).
+- 0.7 MB executable, no GPU. About 3 MB of private memory when idle, and
+  110-175 MB while the Vietnamese model is in use: it loads when an image is
+  read and unloads after an idle minute.
+- Rust + Win32, no UI framework. Runs in the tray (Settings, Pause, Quit);
+  starting it again opens the running copy's settings.
 
 ## How it works
 
@@ -90,6 +92,10 @@ color).
 
 The icons in `assets/` are built from the PNG masters with
 `python tools/icons.py`.
+
+`cargo test --release bench_ -- --ignored --nocapture` prints what screen
+captures, Direct2D, the OCR engines and translation requests cost in time
+and memory on this machine.
 
 ## Known limitations
 

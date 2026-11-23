@@ -40,8 +40,10 @@ const PREFETCH_RETRY: Duration = Duration::from_millis(250);
 const MIN_W: i32 = 24;
 const MIN_H: i32 = 12;
 const CACHE_LIMIT: usize = 64;
-/// Unload the Vietnamese model after this long without any request.
-const UNLOAD_AFTER: Duration = Duration::from_secs(300);
+/// Unload the Vietnamese model after this long without any request. Loaded
+/// it holds 110-175 MB; loading takes about 160 ms and only delays the
+/// Vietnamese reading of the next image (its Windows OCR words show first).
+const UNLOAD_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct Word {
@@ -92,6 +94,9 @@ struct Current {
     /// Coarse look of the image when it was read (see `grid`).
     grid: Vec<[u8; 3]>,
 }
+
+/// The Vietnamese model being loaded on another thread.
+type Loading = std::thread::JoinHandle<std::result::Result<viet::Recognizer, String>>;
 
 pub struct Detector {
     uia: IUIAutomation,
@@ -196,19 +201,21 @@ impl Detector {
         let (w, h) = (clip.right - clip.left, clip.bottom - clip.top);
         // The same pixels read differently in Vietnamese mode.
         let mode = if VIETNAMESE.load(Ordering::Relaxed) { 0x9E37_79B9_7F4A_7C15 } else { 0 };
-        let mut hash = hash_pixels(&capture(clip, w, h)?, w, h);
+        let mut pixels = capture(clip, w, h)?;
+        let mut hash = hash_pixels(&pixels, w, h);
         if !self.cache.contains_key(&(hash ^ mode)) {
             // Not seen before. An image still animating in (viewer zoom, fade)
             // would be read half-drawn, so wait until two captures agree.
             // Cache hits skip this: they matched an image that had settled.
-            let Some(settled) = stable_hash(clip, hash)? else {
+            let Some(settled) = stable_capture(clip, hash)? else {
                 log("image never settled".into());
                 return Ok(None);
             };
-            hash = settled;
+            (hash, pixels) = settled;
         }
         let key = hash ^ mode;
-        let current = Current { element: tracked, clip, grid: grid(&capture(clip, w, h)?, w, h) };
+        let current = Current { element: tracked, clip, grid: grid(&pixels, w, h) };
+        let t_found = t0.elapsed();
 
         if let Some(words) = self.cache.get(&key) {
             log(format!("cache hit {w}x{h} in {:?}", t0.elapsed()));
@@ -218,20 +225,35 @@ impl Detector {
             return Ok(Some(current));
         }
 
-        let (pixels, sw, sh, scale) = self.capture_scaled(clip)?;
+        let loading = self.start_loading();
+        let (pixels, sw, sh, scale) = self.scaled_for_ocr(clip, pixels)?;
+        let t_scaled = t0.elapsed();
         let lines = self.windows_lines(&pixels, sw, sh)?;
-        let vietnamese = VIETNAMESE.load(Ordering::Relaxed) && self.recognizer().is_some();
         let first = to_words(&lines, scale);
-        log(format!("windows ocr {w}x{h}: {} words in {:?}", first.len(), t0.elapsed()));
+        log(format!(
+            "windows ocr {w}x{h}: {} words in {:?} (found {t_found:?}, scaled {:?}, read {:?})",
+            first.len(),
+            t0.elapsed(),
+            t_scaled - t_found,
+            t0.elapsed() - t_scaled
+        ));
         if first.is_empty() {
+            self.finish_loading(loading);
             self.remember(key, Vec::new());
             return Ok(None);
         }
+        // The Windows OCR words go out without waiting for the model.
+        let vietnamese = VIETNAMESE.load(Ordering::Relaxed) && !self.viet_failed;
         report(Stage::Show, OcrData::new(clip, first.clone(), key, vietnamese));
+        self.finish_loading(loading);
 
         let words = if vietnamese {
-            let lines = self.read_vietnamese(&pixels, sw, sh, lines);
-            let words = to_words(&lines, scale);
+            // Without the model (it failed to load) Windows OCR's words stand;
+            // the update still goes out, to end the overlay's pending state.
+            let words = match self.viet {
+                Some(_) => to_words(&self.read_vietnamese(&pixels, sw, sh, lines), scale),
+                None => first,
+            };
             log(format!("vietnamese ready in {:?}", t0.elapsed()));
             report(Stage::Update, OcrData::new(clip, words.clone(), key, false));
             words
@@ -262,26 +284,44 @@ impl Detector {
         unsafe { walker.GetFirstChildElement(element) }.is_err()
     }
 
+    /// Starts loading the Vietnamese model on its own thread if it is wanted
+    /// and not loaded. `detect` does this while Windows OCR reads the image,
+    /// so the load (about 160 ms) costs no time; pass the result to
+    /// `finish_loading`.
+    fn start_loading(&self) -> Option<Loading> {
+        if !VIETNAMESE.load(Ordering::Relaxed) || self.viet.is_some() || self.viet_failed {
+            return None;
+        }
+        Some(std::thread::spawn(|| {
+            let t0 = Instant::now();
+            let model = viet::model_path().ok_or_else(|| "model file not found".to_string()).and_then(|p| viet::Recognizer::load(&p))?;
+            log(format!("Vietnamese model loaded in {:?}", t0.elapsed()));
+            Ok(model)
+        }))
+    }
+
+    fn finish_loading(&mut self, loading: Option<Loading>) {
+        match loading.map(|l| l.join()) {
+            Some(Ok(Ok(model))) => self.viet = Some(model),
+            Some(Ok(Err(e))) => {
+                log(format!("Vietnamese OCR unavailable: {e}"));
+                self.viet_failed = true;
+            }
+            Some(Err(_)) | None => {}
+        }
+    }
+
     /// The Vietnamese recognizer, loaded on first use.
     fn recognizer(&mut self) -> Option<&mut viet::Recognizer> {
-        if self.viet.is_none() && !self.viet_failed {
-            let t0 = Instant::now();
-            match viet::model_path().ok_or_else(|| "model file not found".to_string()).and_then(|p| viet::Recognizer::load(&p)) {
-                Ok(r) => {
-                    log(format!("Vietnamese model loaded in {:?}", t0.elapsed()));
-                    self.viet = Some(r);
-                }
-                Err(e) => {
-                    log(format!("Vietnamese OCR unavailable: {e}"));
-                    self.viet_failed = true;
-                }
-            }
-        }
+        let loading = self.start_loading();
+        self.finish_loading(loading);
         self.viet.as_mut()
     }
 
-    /// Captures `clip` upscaled for OCR. Returns pixels, size and the scale.
-    fn capture_scaled(&self, clip: RECT) -> Result<(Vec<u8>, i32, i32, f32)> {
+    /// The image at the size OCR reads best: `pixels` (a capture of `clip`
+    /// at its own size) when no scaling is needed, else a scaled capture.
+    /// Returns pixels, size and the scale.
+    fn scaled_for_ocr(&self, clip: RECT, pixels: Vec<u8>) -> Result<(Vec<u8>, i32, i32, f32)> {
         let w = clip.right - clip.left;
         let h = clip.bottom - clip.top;
         let longest = w.max(h) as f32;
@@ -290,6 +330,9 @@ impl Detector {
         scale = scale.min(self.max_dim as f32 / longest);
         let sw = ((w as f32 * scale).round() as i32).max(1);
         let sh = ((h as f32 * scale).round() as i32).max(1);
+        if (sw, sh) == (w, h) {
+            return Ok((pixels, w, h, scale));
+        }
         Ok((capture(clip, sw, sh)?, sw, sh, scale))
     }
 
@@ -398,10 +441,6 @@ pub fn run(rx: Receiver<Request>, hwnd: isize) {
         }
     };
     log(format!("OCR language: {}", detector.engine_language()));
-    // Load the Vietnamese model now rather than on the first hover (takes seconds).
-    if VIETNAMESE.load(Ordering::Relaxed) {
-        detector.recognizer();
-    }
     let hwnd = HWND(hwnd as *mut c_void);
     let mut current: Option<Current> = None;
     // A request that arrived while prefetching; handled next.
@@ -415,8 +454,7 @@ pub fn run(rx: Receiver<Request>, hwnd: isize) {
         let first = match next {
             Ok(r) => r,
             Err(RecvTimeoutError::Timeout) => {
-                // Idle: give back the ~80 MB the Vietnamese model holds; it
-                // reloads in a few hundred ms on the next image.
+                // Idle: give back what the Vietnamese model holds.
                 if detector.viet.take().is_some() {
                     log("Vietnamese model unloaded (idle)".into());
                 }
@@ -768,6 +806,11 @@ pub fn line_rects(words: &[Word]) -> Vec<RECT> {
 
 /// Copies screen pixels of `r` into a top-down BGRA buffer of `out_w` x `out_h`
 /// (scaled with HALFTONE when the sizes differ). Alpha is forced to 255.
+///
+/// What it costs is reading the screen, by source area: about 6 ms for
+/// 640x400 and 18 ms for 1920x1200, the same whether the output is full
+/// size or a thumbnail (`bench_capture_paths`). Scaling up is extra: 36 ms
+/// for 1280x800 at 2x.
 pub fn capture(r: RECT, out_w: i32, out_h: i32) -> Result<Vec<u8>> {
     let w = r.right - r.left;
     let h = r.bottom - r.top;
@@ -819,18 +862,19 @@ pub fn capture(r: RECT, out_w: i32, out_h: i32) -> Result<Vec<u8>> {
     }
 }
 
-/// Hash of `clip` once two captures in a row agree (starting from the hash of
-/// a capture just taken), or `None` if it is still changing after
-/// `SETTLE_TIMEOUT`.
-fn stable_hash(clip: RECT, first: u64) -> Result<Option<u64>> {
+/// The capture of `clip`, with its hash, once two captures in a row agree
+/// (starting from the hash of a capture just taken), or `None` if it is
+/// still changing after `SETTLE_TIMEOUT`.
+fn stable_capture(clip: RECT, first: u64) -> Result<Option<(u64, Vec<u8>)>> {
     let (w, h) = (clip.right - clip.left, clip.bottom - clip.top);
     let start = Instant::now();
     let mut prev = first;
     loop {
         std::thread::sleep(SETTLE_STEP);
-        let next = hash_pixels(&capture(clip, w, h)?, w, h);
+        let pixels = capture(clip, w, h)?;
+        let next = hash_pixels(&pixels, w, h);
         if next == prev {
-            return Ok(Some(next));
+            return Ok(Some((next, pixels)));
         }
         if start.elapsed() >= SETTLE_TIMEOUT {
             return Ok(None);
@@ -896,5 +940,135 @@ pub fn log(msg: String) {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *ENABLED.get_or_init(|| cfg!(debug_assertions) || std::env::var_os("QC_LOG").is_some()) {
         eprintln!("[quickcopy] {msg}");
+    }
+}
+
+/// Timings and memory on the real screen and services, to rerun before
+/// changing how the pipeline captures, renders or loads:
+///   cargo test --release bench_ -- --ignored --nocapture
+/// The Vietnamese stages need the test exe copied somewhere under the
+/// project folder (it looks for `models/` in its parent folders).
+#[cfg(test)]
+mod bench {
+    use super::*;
+
+    fn median_ms(mut f: impl FnMut()) -> (f64, f64, f64) {
+        let mut t: Vec<f64> = (0..15)
+            .map(|_| {
+                let t0 = Instant::now();
+                f();
+                t0.elapsed().as_secs_f64() * 1000.0
+            })
+            .collect();
+        t.sort_by(f64::total_cmp);
+        (t[t.len() / 2], t[0], t[t.len() - 1])
+    }
+
+    /// Private bytes and working set, in MB.
+    fn memory() -> (f64, f64) {
+        use windows::Win32::System::ProcessStatus::*;
+        use windows::Win32::System::Threading::GetCurrentProcess;
+        let mut c = PROCESS_MEMORY_COUNTERS_EX::default();
+        unsafe {
+            let _ = GetProcessMemoryInfo(GetCurrentProcess(), (&mut c as *mut PROCESS_MEMORY_COUNTERS_EX).cast(), size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32);
+        }
+        (c.PrivateUsage as f64 / 1048576.0, c.WorkingSetSize as f64 / 1048576.0)
+    }
+
+    /// What Direct2D and DirectWrite hold on to (see `paint::RENDER_TARGET`).
+    #[test]
+    #[ignore = "memory"]
+    fn bench_d2d_memory() {
+        let stage = |name: &str| {
+            std::thread::sleep(Duration::from_millis(300));
+            let (private, ws) = memory();
+            println!("{name:<44} private {private:7.1} MB   working set {ws:7.1} MB");
+        };
+        stage("start");
+        std::hint::black_box(crate::paint::measure("Sao chép Ctrl+C", 12.0, 400));
+        stage("after DirectWrite measure");
+        let t0 = Instant::now();
+        let ink = crate::style::Ink { body: 8.0, baseline: 0.0, stroke: 1.4 };
+        std::hint::black_box(crate::paint::match_style("Sao chép", ink).is_some());
+        println!("first Direct2D draw (10 renders): {:?}", t0.elapsed());
+        stage("after Direct2D DC render target");
+        let t0 = Instant::now();
+        std::hint::black_box(crate::paint::match_style("Sao chép", ink).is_some());
+        println!("10 more renders: {:?}", t0.elapsed());
+        stage("after more Direct2D");
+    }
+    /// What each part of the pipeline holds on to, stage by stage.
+    #[test]
+    #[ignore = "memory on the real screen"]
+    fn bench_memory() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        }
+        let stage = |name: &str| {
+            std::thread::sleep(Duration::from_millis(300));
+            let (private, ws) = memory();
+            println!("{name:<44} private {private:7.1} MB   working set {ws:7.1} MB");
+        };
+        stage("start");
+        let mut d = Detector::new().unwrap();
+        stage("detector created (UIA + OCR engine)");
+        let (w, h) = (1280, 800);
+        let clip = RECT { left: 0, top: 0, right: w, bottom: h };
+        let px = capture(clip, w * 2, h * 2).unwrap();
+        let t0 = Instant::now();
+        let lines = d.windows_lines(&px, w * 2, h * 2).unwrap();
+        println!("first OCR: {} lines in {:?}", lines.len(), t0.elapsed());
+        stage("after first Windows OCR");
+        let t0 = Instant::now();
+        for _ in 0..3 {
+            d.windows_lines(&px, w * 2, h * 2).unwrap();
+        }
+        println!("3 more OCRs: {:?} each", t0.elapsed() / 3);
+        stage("after 4 Windows OCRs");
+        let t0 = Instant::now();
+        d.engine = make_engine().unwrap();
+        println!("engine recreated in {:?}", t0.elapsed());
+        stage("engine dropped and recreated");
+        let t0 = Instant::now();
+        d.windows_lines(&px, w * 2, h * 2).unwrap();
+        println!("first OCR on the new engine: {:?}", t0.elapsed());
+        stage("after OCR on the new engine");
+        let _ = unsafe { d.uia.ElementFromPoint(POINT { x: 600, y: 400 }) };
+        stage("after a UIA query");
+
+        let t0 = Instant::now();
+        let loaded = d.recognizer().is_some();
+        println!("Vietnamese model loaded: {loaded} in {:?}", t0.elapsed());
+        stage("Vietnamese model loaded");
+        let t0 = Instant::now();
+        let read = d.read_vietnamese(&px, (w * 2) as i32, (h * 2) as i32, lines.clone());
+        println!("Vietnamese read {} lines in {:?}", read.len(), t0.elapsed());
+        stage("after one Vietnamese read");
+        for i in 2..=5 {
+            let t0 = Instant::now();
+            d.read_vietnamese(&px, (w * 2) as i32, (h * 2) as i32, lines.clone());
+            println!("Vietnamese read {i}: {:?}", t0.elapsed());
+            stage("after another Vietnamese read");
+        }
+        d.viet = None;
+        stage("Vietnamese model dropped");
+        drop(px);
+        drop(d);
+        stage("detector dropped");
+    }
+    #[test]
+    #[ignore = "timing on the real screen"]
+    fn bench_capture_paths() {
+        for (w, h) in [(640, 400), (1280, 800), (1920, 1200)] {
+            let clip = RECT { left: 0, top: 0, right: w, bottom: h };
+            let px = capture(clip, w, h).unwrap();
+            let row = |name: &str, (m, lo, hi): (f64, f64, f64)| println!("{w}x{h} {name:<28} {m:7.3} ms  ({lo:.3} .. {hi:.3})");
+            row("capture full", median_ms(|| drop(capture(clip, w, h).unwrap())));
+            row("capture 2x halftone", median_ms(|| drop(capture(clip, w * 2, h * 2).unwrap())));
+            row("capture 1/4", median_ms(|| drop(capture(clip, w / 4, h / 4).unwrap())));
+            row("capture 64x64", median_ms(|| drop(capture(clip, 64, 64).unwrap())));
+            row("hash (sip)", median_ms(|| { std::hint::black_box(hash_pixels(&px, w, h)); }));
+            row("grid", median_ms(|| drop(std::hint::black_box(grid(&px, w, h)))));
+        }
     }
 }

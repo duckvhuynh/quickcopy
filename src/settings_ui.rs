@@ -501,7 +501,7 @@ fn paint(ui: &mut Ui) -> Result<()> {
     let size = D2D_SIZE_U { width: (rc.right - rc.left) as u32, height: (rc.bottom - rc.top) as u32 };
     let drawn = paint::with_factories(|f| -> Result<()> {
         if ui.target.is_none() {
-            let props = D2D1_RENDER_TARGET_PROPERTIES { dpiX: 96.0, dpiY: 96.0, ..Default::default() };
+            let props = D2D1_RENDER_TARGET_PROPERTIES { r#type: paint::RENDER_TARGET, dpiX: 96.0, dpiY: 96.0, ..Default::default() };
             let hprops = D2D1_HWND_RENDER_TARGET_PROPERTIES { hwnd, pixelSize: size, presentOptions: D2D1_PRESENT_OPTIONS_NONE };
             ui.target = Some(unsafe { f.d2d.CreateHwndRenderTarget(&props, &hprops)? });
         }

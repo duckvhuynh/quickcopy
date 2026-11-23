@@ -36,6 +36,7 @@ use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::DataExchange::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::*;
+use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
 use windows::Win32::UI::HiDpi::*;
@@ -105,8 +106,9 @@ struct App {
     /// The system accent, read when the overlay is shown.
     selection_color: theme::Rgb,
     last_dblclk: Option<(Instant, POINT)>,
-    /// A translation request is out.
+    /// A translation request is out; its number is `translation_request`.
     translating: bool,
+    translation_request: u64,
     translation: Option<Shown>,
     /// Copy / Translate menu shown at the cursor after a selection.
     popover: popover::Popover,
@@ -130,17 +132,43 @@ fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
     APP.with(|a| a.try_borrow_mut().ok().and_then(|mut a| a.as_mut().map(f)))
 }
 
+/// Vietnamese reading is on when the setting is, the model is installed, and
+/// QC_ENGLISH (Windows OCR only, for comparing in --probe) is not set.
+fn vietnamese_wanted() -> bool {
+    settings::get().vietnamese_ocr && viet::model_path().is_some() && std::env::var_os("QC_ENGLISH").is_none()
+}
+
+/// True if this is the only running QuickCopy. A second launch would put a
+/// second overlay and tray icon over the first; it opens the running one's
+/// settings instead (what launching the app again is for) and exits.
+fn only_instance() -> bool {
+    unsafe {
+        // Kept for the life of the process; Windows frees it on exit.
+        let _ = CreateMutexW(None, false, w!("QuickCopy.Running"));
+        if GetLastError() != ERROR_ALREADY_EXISTS {
+            return true;
+        }
+        if let Ok(running) = FindWindowExW(Some(HWND_MESSAGE), None, w!("QuickCopyMain"), None) {
+            let _ = PostMessageW(Some(running), WM_COMMAND, WPARAM(MENU_SETTINGS), LPARAM(0));
+        }
+        false
+    }
+}
+
+/// Explorer broadcasts this when the taskbar is created again (it crashed or
+/// restarted); tray icons are gone then and must be added again.
+fn taskbar_created() -> u32 {
+    static MESSAGE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *MESSAGE.get_or_init(|| unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) })
+}
+
 fn main() -> Result<()> {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
 
-    // Vietnamese reading is on whenever the model is installed
-    // (QC_ENGLISH=1 forces Windows OCR, for comparing in --probe).
-    let prefs = settings::get();
-    i18n::set(prefs.ui_language);
-    let vietnamese = prefs.vietnamese_ocr && viet::model_path().is_some() && std::env::var_os("QC_ENGLISH").is_none();
-    worker::VIETNAMESE.store(vietnamese, Ordering::Relaxed);
+    i18n::set(settings::get().ui_language);
+    worker::VIETNAMESE.store(vietnamese_wanted(), Ordering::Relaxed);
 
     let args: Vec<String> = std::env::args().collect();
     if args.len() == 3 && args[1] == "--ocr-file" {
@@ -150,6 +178,9 @@ fn main() -> Result<()> {
         let x = args[2].parse().expect("X must be an integer");
         let y = args[3].parse().expect("Y must be an integer");
         return worker::probe(POINT { x, y });
+    }
+    if !only_instance() {
+        return Ok(());
     }
 
     unsafe {
@@ -261,6 +292,7 @@ fn main() -> Result<()> {
                 selection_color: theme::get().selection,
                 last_dblclk: None,
                 translating: false,
+                translation_request: 0,
                 translation: None,
                 popover: popover::Popover::new(popover_hwnd),
             })
@@ -331,8 +363,7 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         settings_ui::WM_APP_SETTINGS_CHANGED => {
             // Apply what the settings window changed.
             refresh_tray_icon(hwnd);
-            let vietnamese = settings::get().vietnamese_ocr && viet::model_path().is_some();
-            worker::VIETNAMESE.store(vietnamese, Ordering::Relaxed);
+            worker::VIETNAMESE.store(vietnamese_wanted(), Ordering::Relaxed);
             with_app(|app| {
                 hide(app);
                 let _ = app.tx.send(Request::Forget);
@@ -435,8 +466,6 @@ fn show(app: &mut App, data: OcrData) {
     if app.paused || !contains(data.rect, pos) || app.data.is_some() {
         return;
     }
-    theme::refresh();
-    app.selection_color = theme::get().selection;
     theme::refresh();
     app.selection_color = theme::get().selection;
     let r = data.rect;
@@ -552,6 +581,13 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
             theme::refresh();
             if let Some(main) = with_app(|app| app.main) {
                 refresh_tray_icon(main);
+            }
+            LRESULT(0)
+        }
+        _ if msg == taskbar_created() => {
+            if let Some(main) = with_app(|app| app.main) {
+                log("taskbar created again: adding the tray icon".into());
+                add_tray_icon(main);
             }
             LRESULT(0)
         }
@@ -726,8 +762,10 @@ fn on_button_down(app: &mut App, pt: POINT) {
     }
     activate(app);
     app.popover.hide();
-    // A new selection starts from the original text.
+    // A new selection starts from the original text, and no longer waits
+    // for a translation of the previous one.
     app.translation = None;
+    app.translating = false;
     let Some(model) = &app.model else { return };
     let at = model.hit(pt);
 
@@ -974,15 +1012,22 @@ fn start_translation(app: &mut App) {
     }
     log(format!("translating {} line(s)", lines.len()));
     app.translating = true;
+    app.translation_request += 1;
+    let (request, clip) = (app.translation_request, data.rect);
     render(app);
-    translate::spawn(app.main, data.id, data.rect, settings::get().target_language, lines);
+    translate::spawn(app.main, request, clip, settings::get().target_language, lines);
 }
 
 /// A translation came back: draw it in the original's size and weight, on
 /// the original baselines, wrapped into the selected line boxes.
 fn apply_translation(app: &mut App, translated: Translated) {
+    // Only the request that is still waiting (not one from a selection or
+    // image since dismissed).
+    if !app.translating || translated.request != app.translation_request {
+        return;
+    }
     app.translating = false;
-    let Some(image_w) = app.data.as_ref().filter(|d| d.id == translated.id).map(|d| d.rect.right - d.rect.left) else {
+    let Some(image_w) = app.data.as_ref().map(|d| d.rect.right - d.rect.left) else {
         return;
     };
     let units = match translated.result {
@@ -1398,8 +1443,14 @@ fn tray_command(main: HWND, id: usize) {
         MENU_PAUSE => {
             with_app(|app| {
                 app.paused = !app.paused;
-                if app.paused {
-                    hide(app);
+                // Paused, nothing watches the cursor.
+                unsafe {
+                    if app.paused {
+                        hide(app);
+                        let _ = KillTimer(Some(main), TICK_TIMER);
+                    } else {
+                        SetTimer(Some(main), TICK_TIMER, TICK_MS, None);
+                    }
                 }
             });
         }

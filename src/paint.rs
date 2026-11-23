@@ -38,6 +38,12 @@ pub struct DrawBox {
     pub baseline: Option<f32>,
 }
 
+/// Software rendering for every target. These surfaces are small and end up
+/// in a GDI bitmap anyway; a hardware target creates a Direct3D device that
+/// holds about 31 MB for the life of the process and renders them slower
+/// (measured: 35 MB vs 4 MB private, 13 ms vs 7 ms per 10 text renders).
+pub(crate) const RENDER_TARGET: D2D1_RENDER_TARGET_TYPE = D2D1_RENDER_TARGET_TYPE_SOFTWARE;
+
 pub(crate) struct Factories {
     pub d2d: ID2D1Factory,
     pub dwrite: IDWriteFactory,
@@ -178,7 +184,7 @@ fn render_ink(text: &str, size: f32, weight: i32) -> Option<style::Ink> {
 
 pub(crate) fn dc_target(d2d: &ID2D1Factory, dc: HDC, w: i32, h: i32) -> Result<ID2D1DCRenderTarget> {
     let props = D2D1_RENDER_TARGET_PROPERTIES {
-        r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        r#type: RENDER_TARGET,
         pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
         // 96 DPI: one Direct2D unit is one overlay pixel.
         dpiX: 96.0,

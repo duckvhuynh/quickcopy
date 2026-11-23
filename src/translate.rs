@@ -48,18 +48,18 @@ pub struct UnitResult {
 }
 
 pub struct Translated {
-    /// `OcrData::id` of the image this belongs to.
-    pub id: u64,
+    /// The request this answers (the number given to `spawn`).
+    pub request: u64,
     pub result: std::result::Result<Vec<UnitResult>, String>,
 }
 
 /// Translates the selected `lines` (reading order) on a background thread and
 /// posts `WM_APP_TRANSLATED` to `hwnd`. `clip` is the image's screen rect.
-pub fn spawn(hwnd: HWND, id: u64, clip: RECT, target: String, lines: Vec<Line>) {
+pub fn spawn(hwnd: HWND, request: u64, clip: RECT, target: String, lines: Vec<Line>) {
     let hwnd = hwnd.0 as isize;
     std::thread::spawn(move || {
         let result = run(clip, &target, lines);
-        let ptr = Box::into_raw(Box::new(Translated { id, result }));
+        let ptr = Box::into_raw(Box::new(Translated { request, result }));
         unsafe {
             if PostMessageW(Some(HWND(hwnd as *mut c_void)), WM_APP_TRANSLATED, WPARAM(0), LPARAM(ptr as isize)).is_err() {
                 drop(Box::from_raw(ptr));
@@ -71,7 +71,7 @@ pub fn spawn(hwnd: HWND, id: u64, clip: RECT, target: String, lines: Vec<Line>) 
 fn run(clip: RECT, target: &str, lines: Vec<Line>) -> std::result::Result<Vec<UnitResult>, String> {
     let (w, h) = (clip.right - clip.left, clip.bottom - clip.top);
     let pixels = crate::worker::capture(clip, w, h).map_err(|e| e.to_string())?;
-    let mut slices: Vec<Slice> = lines
+    let slices: Vec<Slice> = lines
         .into_iter()
         .map(|Line { rect, text }| {
             let (background, foreground) = sample_colors(&pixels, w, h, rect);
@@ -84,13 +84,16 @@ fn run(clip: RECT, target: &str, lines: Vec<Line>) -> std::result::Result<Vec<Un
         .collect();
     let groups = group(&slices);
     log(format!("{} line(s) in {} unit(s)", slices.len(), groups.len()));
+    let texts: Vec<String> = groups.iter().map(|range| slices[range.clone()].iter().map(|s| s.original.trim()).collect::<Vec<_>>().join(" ")).collect();
+    let t0 = std::time::Instant::now();
+    let translations = translate_all(&texts.iter().map(String::as_str).collect::<Vec<_>>(), target);
+    log(format!("{} unit(s) translated in {:?}", texts.len(), t0.elapsed()));
+    // The groups are consecutive and cover every line, in order.
+    let mut rest = slices.into_iter();
     let mut out = Vec::new();
-    for range in groups.into_iter().rev() {
-        let unit: Vec<Slice> = slices.drain(range).collect();
-        let text = unit.iter().map(|s| s.original.trim()).collect::<Vec<_>>().join(" ");
-        out.push(UnitResult { translation: translate(&text, target)?, slices: unit });
+    for (range, translation) in groups.into_iter().zip(translations) {
+        out.push(UnitResult { translation: translation?, slices: rest.by_ref().take(range.len()).collect() });
     }
-    out.reverse();
     Ok(out)
 }
 
@@ -149,6 +152,25 @@ pub fn group(lines: &[Slice]) -> Vec<std::ops::Range<usize>> {
     out
 }
 
+/// Requests in flight at once (they share one HTTP/2 connection).
+const PARALLEL: usize = 8;
+const CACHE_LIMIT: usize = 256;
+
+/// Translates several texts at the same time; results in the same order.
+pub fn translate_all(texts: &[&str], target: &str) -> Vec<std::result::Result<String, String>> {
+    if let [text] = texts {
+        return vec![translate(text, target)];
+    }
+    let mut out = Vec::with_capacity(texts.len());
+    for batch in texts.chunks(PARALLEL) {
+        std::thread::scope(|s| {
+            let running: Vec<_> = batch.iter().map(|text| s.spawn(move || translate(text, target))).collect();
+            out.extend(running.into_iter().map(|t| t.join().unwrap_or_else(|_| Err("translation failed".into()))));
+        });
+    }
+    out
+}
+
 static CACHE: Mutex<Option<HashMap<(String, String), String>>> = Mutex::new(None);
 
 /// Translates `text` to `target` (see the fallback below when it already
@@ -173,7 +195,12 @@ pub fn translate(text: &str, target: &str) -> std::result::Result<String, String
         translated.push_str(&part);
     }
     log(format!("translated {} chars in {:?}", text.chars().count(), t0.elapsed()));
-    CACHE.lock().unwrap().get_or_insert_with(HashMap::new).insert(key, translated.clone());
+    let mut cache = CACHE.lock().unwrap();
+    let cache = cache.get_or_insert_with(HashMap::new);
+    if cache.len() >= CACHE_LIMIT {
+        cache.clear();
+    }
+    cache.insert(key, translated.clone());
     Ok(translated)
 }
 
@@ -204,7 +231,7 @@ fn request(text: &str, target: &str) -> std::result::Result<(String, String), St
         encode(text),
         encode(&key)
     );
-    let body = https_get(HOST, &path).map_err(|e| format!("request failed: {e}"))?;
+    let body = https_get(&path).map_err(|e| format!("request failed: {e}"))?;
     let json: serde_json::Value = serde_json::from_slice(&body).map_err(|e| format!("bad response: {e}"))?;
     let translation = json["translation"]
         .as_str()
@@ -225,25 +252,51 @@ fn encode(s: &str) -> String {
     out
 }
 
-/// HTTPS GET with WinHTTP (built into Windows: no TLS library to ship).
-fn https_get(host: &str, path: &str) -> Result<Vec<u8>> {
-    struct Handle(*mut c_void);
-    impl Drop for Handle {
-        fn drop(&mut self) {
-            if !self.0.is_null() {
-                unsafe {
-                    let _ = WinHttpCloseHandle(self.0);
-                }
+struct Handle(*mut c_void);
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                let _ = WinHttpCloseHandle(self.0);
             }
         }
     }
-    let check = |h: *mut c_void| if h.is_null() { Err(Error::from_thread()) } else { Ok(Handle(h)) };
+}
+
+// WinHTTP handles may be used from any thread.
+unsafe impl Send for Handle {}
+
+fn check(h: *mut c_void) -> Result<Handle> {
+    if h.is_null() { Err(Error::from_thread()) } else { Ok(Handle(h)) }
+}
+
+/// The connection to `HOST` that every request shares, opened on first use
+/// and kept for the life of the process. A session per request repeated
+/// proxy detection, DNS and the TLS handshake each time (measured: three
+/// requests took 0.4-2.9 s one after another on sessions of their own, and
+/// 0.14 s sent together on this one).
+fn connection() -> Result<*mut c_void> {
+    static SHARED: Mutex<Option<(Handle, Handle)>> = Mutex::new(None);
+    let mut shared = SHARED.lock().unwrap();
+    if shared.is_none() {
+        unsafe {
+            let session = check(WinHttpOpen(w!("QuickCopy/0.1"), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, PCWSTR::null(), PCWSTR::null(), 0))?;
+            WinHttpSetTimeouts(session.0, 5000, 5000, 8000, 8000)?;
+            // HTTP/2, so requests sent together share the connection.
+            let _ = WinHttpSetOption(Some(session.0), WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, Some(&WINHTTP_PROTOCOL_FLAG_HTTP2.to_ne_bytes()));
+            let connect = check(WinHttpConnect(session.0, &HSTRING::from(HOST), INTERNET_DEFAULT_HTTPS_PORT, 0))?;
+            *shared = Some((session, connect));
+        }
+    }
+    Ok(shared.as_ref().map_or(std::ptr::null_mut(), |(_, connect)| connect.0))
+}
+
+/// HTTPS GET with WinHTTP (built into Windows: no TLS library to ship).
+fn https_get(path: &str) -> Result<Vec<u8>> {
     unsafe {
-        let session = check(WinHttpOpen(w!("QuickCopy/0.1"), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, PCWSTR::null(), PCWSTR::null(), 0))?;
-        WinHttpSetTimeouts(session.0, 5000, 5000, 8000, 8000)?;
-        let connect = check(WinHttpConnect(session.0, &HSTRING::from(host), INTERNET_DEFAULT_HTTPS_PORT, 0))?;
         let request = check(WinHttpOpenRequest(
-            connect.0,
+            connection()?,
             w!("GET"),
             &HSTRING::from(path),
             PCWSTR::null(),
@@ -432,5 +485,32 @@ mod tests {
         assert_eq!(bg, [255, 255, 255]);
         // (10, 30, 120) pushed a quarter further from white.
         assert_eq!(fg, [0, 0, 87]);
+    }
+}
+
+/// Request timings against the real service:
+///   cargo test --release bench_translate -- --ignored --nocapture
+#[cfg(test)]
+mod bench {
+    use super::*;
+
+    #[test]
+    #[ignore = "network"]
+    fn bench_translate() {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let texts: Vec<String> = ["The settings page has been reorganized", "Open the app and sign in", "Your order ships tomorrow", "Press any key to continue", "Changes are saved automatically", "This file is read only"]
+            .iter()
+            .map(|t| format!("{t} ({stamp})."))
+            .collect();
+        let t_all = std::time::Instant::now();
+        for text in &texts[..3] {
+            let t0 = std::time::Instant::now();
+            let out = translate(text, "vi").unwrap();
+            println!("one by one: {:?}  {out:?}", t0.elapsed());
+        }
+        println!("3 requests one by one: {:?}", t_all.elapsed());
+        let t0 = std::time::Instant::now();
+        let out = translate_all(&texts[3..].iter().map(String::as_str).collect::<Vec<_>>(), "vi");
+        println!("3 requests via translate_all: {:?}  ok: {}", t0.elapsed(), out.iter().filter(|r| r.is_ok()).count());
     }
 }

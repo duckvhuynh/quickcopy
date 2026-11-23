@@ -48,6 +48,9 @@ impl Recognizer {
             .map_err(|e| err(&e))?;
         // ONNX Runtime already defaults to full graph optimization; setting the
         // level explicitly is rejected by the 1.17 runtime Windows ships.
+        // Its memory arena stays on: without it the session holds 65 MB
+        // instead of 110-175 MB, but reads take 1.5-2x as long per line. The
+        // worker unloads the model when idle instead.
         let session = Session::builder(&env)
             .map_err(|e| err(&e))?
             // 0 = one thread per physical core; measured fastest.
