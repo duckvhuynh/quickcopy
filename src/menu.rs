@@ -2,6 +2,8 @@
 //! system menu. It closes when it loses focus, on Esc, or once an entry is
 //! picked; a pick is posted to the owner window as WM_COMMAND with the id.
 
+#![cfg(windows)]
+
 use std::cell::RefCell;
 
 use windows::Win32::Foundation::*;

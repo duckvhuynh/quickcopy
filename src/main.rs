@@ -13,7 +13,10 @@
 //!                             order, with the block each belongs to
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Off Windows only the platform-independent modules build, for their tests.
+#![cfg_attr(not(windows), allow(dead_code))]
 
+mod common;
 mod i18n;
 mod languages;
 mod layout;
@@ -32,6 +35,20 @@ mod video;
 mod viet;
 mod worker;
 
+#[cfg(not(windows))]
+fn main() -> std::process::ExitCode {
+    eprintln!("QuickCopy for Linux is not available yet. The plan: docs/linux.md (https://github.com/duckvhuynh/quickcopy/blob/main/docs/linux.md).");
+    std::process::ExitCode::FAILURE
+}
+
+/// Marks every item it wraps `#[cfg(windows)]`: the rest of this file is the
+/// Windows app (tray, overlay, input), and the modules it alone uses carry
+/// `#![cfg(windows)]` at their top.
+macro_rules! windows_only {
+    ($($item:item)*) => { $(#[cfg(windows)] $item)* };
+}
+
+windows_only! {
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::sync::atomic::Ordering;
@@ -1541,3 +1558,5 @@ fn tray_command(main: HWND, id: usize) {
         _ => {}
     }
 }
+
+} // windows_only!

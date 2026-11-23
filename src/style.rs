@@ -4,7 +4,7 @@
 //! The same measurement runs on the original text in the image and on sample
 //! text we render ourselves, so the two compare like for like.
 
-use windows::Win32::Foundation::RECT;
+use crate::common::RECT;
 
 use crate::translate::Rgb;
 

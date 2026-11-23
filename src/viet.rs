@@ -88,7 +88,7 @@ impl Recognizer {
             .map_err(|e| err(&e))?;
         // Without the table lines are read as the model reads them.
         let syllables = lm::Lm::load(&path.with_file_name(SYLLABLES_FILE))
-            .map_err(|e| crate::worker::log(format!("Vietnamese tone marks as read: {e}")))
+            .map_err(|e| crate::common::log(format!("Vietnamese tone marks as read: {e}")))
             .ok();
         Ok(Self { session, vocab: VOCAB.chars().collect(), syllables })
     }

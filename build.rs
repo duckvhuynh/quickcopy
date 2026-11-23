@@ -4,6 +4,10 @@ fn main() {
     // App icon (Explorer, title bar), the tray glyphs, version info and the
     // application manifest; see assets/.
     println!("cargo:rerun-if-changed=assets");
+    // The target's OS, not the host's: build scripts run on the host.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
 
     // assets/quickcopy.rc includes version.h; rc.exe gets OUT_DIR on its
     // include path, so the version Explorer shows is the Cargo.toml one.

@@ -3,6 +3,8 @@
 //! color and keeps only a close button, which hides the window to the tray.
 //! Choosing the translate-into language swaps the rows for a searchable list.
 
+#![cfg(windows)]
+
 use std::cell::RefCell;
 
 use windows::Win32::Foundation::*;

@@ -1,15 +1,17 @@
-//! User settings, kept in %APPDATA%\QuickCopy\settings.json. Starting with
-//! Windows is not stored there: the Run registry value is the one source of
-//! truth for it.
+//! User settings, kept in %APPDATA%\QuickCopy\settings.json (elsewhere in
+//! $XDG_CONFIG_HOME/quickcopy). Starting with Windows is not stored there:
+//! the Run registry value is the one source of truth for it.
 
 use std::path::PathBuf;
 use std::sync::{LazyLock, RwLock};
 
 use serde::{Deserialize, Serialize};
+#[cfg(windows)]
 use windows::Win32::System::Registry::*;
-use windows::Win32::UI::Input::KeyboardAndMouse::*;
+#[cfg(windows)]
 use windows::core::*;
 
+use crate::common::vk::*;
 use crate::i18n::UiLang;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -107,12 +109,22 @@ pub fn update(change: impl FnOnce(&mut Settings)) {
     let mut s = CURRENT.write().unwrap();
     change(&mut s);
     if let Err(e) = save(&s) {
-        crate::worker::log(format!("saving settings failed: {e}"));
+        crate::common::log(format!("saving settings failed: {e}"));
     }
 }
 
+#[cfg(windows)]
 fn path() -> Option<PathBuf> {
     Some(PathBuf::from(std::env::var_os("APPDATA")?).join("QuickCopy").join("settings.json"))
+}
+
+#[cfg(not(windows))]
+fn path() -> Option<PathBuf> {
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| Some(PathBuf::from(std::env::var_os("HOME")?).join(".config")))?;
+    Some(config.join("quickcopy").join("settings.json"))
 }
 
 fn load() -> Settings {
@@ -130,10 +142,13 @@ fn save(s: &Settings) -> std::io::Result<()> {
     std::fs::write(p, serde_json::to_string_pretty(s).map_err(std::io::Error::other)?)
 }
 
+#[cfg(windows)]
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+#[cfg(windows)]
 const RUN_VALUE: PCWSTR = w!("QuickCopy");
 
 /// Whether Windows starts this exe at sign-in (the Run value points here).
+#[cfg(windows)]
 pub fn start_with_windows() -> bool {
     let mut buf = [0u16; 1024];
     let mut size = (buf.len() * 2) as u32;
@@ -147,6 +162,7 @@ pub fn start_with_windows() -> bool {
     std::env::current_exe().is_ok_and(|exe| value.trim_matches('"').eq_ignore_ascii_case(&exe.to_string_lossy()))
 }
 
+#[cfg(windows)]
 pub fn set_start_with_windows(on: bool) -> Result<()> {
     unsafe {
         let mut key = HKEY::default();
