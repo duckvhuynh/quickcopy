@@ -88,11 +88,15 @@ pub struct Settings {
     pub translate_shortcut: Shortcut,
     /// Re-read lines with VieSVTR (when the model is installed).
     pub vietnamese_ocr: bool,
+    /// Look for new versions in the GitHub releases (update.rs).
+    pub check_updates: bool,
+    /// The last version the tray announced, so each is announced once.
+    pub update_notified: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { target_language: "vi".into(), ui_language: UiLang::Vi, translate_shortcut: Shortcut::default(), vietnamese_ocr: true }
+        Self { target_language: "vi".into(), ui_language: UiLang::Vi, translate_shortcut: Shortcut::default(), vietnamese_ocr: true, check_updates: true, update_notified: String::new() }
     }
 }
 
@@ -201,6 +205,7 @@ mod tests {
         let old: Settings = serde_json::from_str(r#"{"target_language":"fr"}"#).unwrap();
         assert_eq!(old.target_language, "fr");
         assert_eq!(old.translate_shortcut, Shortcut::default());
+        assert!(old.check_updates);
     }
 
     #[test]

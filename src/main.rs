@@ -11,9 +11,16 @@
 //!                             in image file F selects; several drags allowed
 //!   quickcopy --layout F      print the lines of image file F in reading
 //!                             order, with the block each belongs to
+//!   quickcopy --check-update  print the latest release and its asset URLs
+//!                             (installs nothing; see update.rs)
+//!
+//! Testing hooks: QC_UPDATE_API points the update check at another release
+//! JSON (update.rs); QC_INSTANCE=name runs an instance beside the installed
+//! one (its own single-instance mutex).
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod http;
 mod i18n;
 mod languages;
 mod layout;
@@ -28,6 +35,7 @@ mod style;
 mod textmodel;
 mod theme;
 mod translate;
+mod update;
 mod video;
 mod viet;
 mod worker;
@@ -77,6 +85,7 @@ const FLASH_MS: u32 = 250;
 const MENU_PAUSE: usize = 100;
 const MENU_QUIT: usize = 101;
 const MENU_SETTINGS: usize = 102;
+const MENU_UPDATE: usize = 103;
 const MENU_COPY: usize = 200;
 const MENU_SELECT_ALL: usize = 201;
 const MENU_TRANSLATE: usize = 202;
@@ -172,12 +181,28 @@ fn drag_file(path: &str, points: &[String]) -> Result<()> {
 /// True if this is the only running QuickCopy. A second launch would put a
 /// second overlay and tray icon over the first; it opens the running one's
 /// settings instead (what launching the app again is for) and exits.
-fn only_instance() -> bool {
+/// `wait`: an updated exe, started by the old one just before it quits,
+/// waits for it to go.
+fn only_instance(wait: bool) -> bool {
+    let name = match std::env::var("QC_INSTANCE") {
+        Ok(n) => format!("QuickCopy.Running.{n}"),
+        Err(_) => "QuickCopy.Running".to_string(),
+    };
+    let deadline = Instant::now() + Duration::from_secs(30);
     unsafe {
-        // Kept for the life of the process; Windows frees it on exit.
-        let _ = CreateMutexW(None, false, w!("QuickCopy.Running"));
-        if GetLastError() != ERROR_ALREADY_EXISTS {
-            return true;
+        loop {
+            // Kept for the life of the process; Windows frees it on exit.
+            let mutex = CreateMutexW(None, false, &HSTRING::from(&name));
+            if GetLastError() != ERROR_ALREADY_EXISTS {
+                return true;
+            }
+            if !wait || Instant::now() >= deadline {
+                break;
+            }
+            if let Ok(h) = mutex {
+                let _ = CloseHandle(h);
+            }
+            std::thread::sleep(Duration::from_millis(100));
         }
         if let Ok(running) = FindWindowExW(Some(HWND_MESSAGE), None, w!("QuickCopyMain"), None) {
             let _ = PostMessageW(Some(running), WM_COMMAND, WPARAM(MENU_SETTINGS), LPARAM(0));
@@ -224,7 +249,14 @@ fn main() -> Result<()> {
         }
         return worker::probe(POINT { x, y });
     }
-    if !only_instance() {
+    if args.len() == 2 && args[1] == "--check-update" {
+        if !update::print_check() {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    let updated = args.iter().any(|a| a == "--updated");
+    if !only_instance(updated) {
         return Ok(());
     }
 
@@ -359,6 +391,12 @@ fn main() -> Result<()> {
             0,
             WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
         );
+        update::start(main);
+        if updated {
+            let version = update::Version::current().to_string();
+            log(format!("running the update to {version}"));
+            balloon(main, "QuickCopy", &i18n::t().updated.replace("{}", &version), NIIF_INFO);
+        }
         log("running; hover an image, then select its text".into());
         if args.iter().any(|a| a == "--settings") {
             settings_ui::open(main);
@@ -424,6 +462,10 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             });
             LRESULT(0)
         }
+        update::WM_APP_UPDATE_STATUS => {
+            on_update_status(hwnd);
+            LRESULT(0)
+        }
         WM_COMMAND => {
             tray_command(hwnd, wp.0 & 0xFFFF);
             LRESULT(0)
@@ -432,7 +474,7 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             let event = (lp.0 & 0xFFFF) as u32;
             if event == WM_RBUTTONUP || event == WM_CONTEXTMENU {
                 tray_menu(hwnd);
-            } else if event == WM_LBUTTONDBLCLK {
+            } else if event == WM_LBUTTONDBLCLK || event == NIN_BALLOONUSERCLICK {
                 settings_ui::open(hwnd);
             }
             LRESULT(0)
@@ -1453,9 +1495,46 @@ fn tray_data(main: HWND) -> NOTIFYICONDATAW {
         hIcon: tray_icon(),
         ..Default::default()
     };
-    let tip: Vec<u16> = i18n::t().tooltip.encode_utf16().take(nid.szTip.len() - 1).collect();
-    nid.szTip[..tip.len()].copy_from_slice(&tip);
+    put_wide(&mut nid.szTip, i18n::t().tooltip);
     nid
+}
+
+/// Copies `s` into a fixed, NUL-terminated buffer, cut to fit.
+fn put_wide(dst: &mut [u16], s: &str) {
+    let wide: Vec<u16> = s.encode_utf16().take(dst.len() - 1).collect();
+    dst[..wide.len()].copy_from_slice(&wide);
+    dst[wide.len()] = 0;
+}
+
+/// A notification from the tray icon; clicking it opens the settings.
+fn balloon(main: HWND, title: &str, text: &str, icon: NOTIFY_ICON_INFOTIP_FLAGS) {
+    let mut nid = tray_data(main);
+    nid.uFlags |= NIF_INFO;
+    nid.dwInfoFlags = icon;
+    put_wide(&mut nid.szInfoTitle, title);
+    put_wide(&mut nid.szInfo, text);
+    unsafe {
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+    }
+}
+
+/// The update checker's status changed: announce a new version once, report
+/// a failed install, or quit so the installed version can take over.
+fn on_update_status(main: HWND) {
+    settings_ui::refresh();
+    let t = i18n::t();
+    match update::status() {
+        update::Status::Available(r) => {
+            let version = r.version.to_string();
+            if settings::get().update_notified != version {
+                settings::update(|s| s.update_notified = version.clone());
+                balloon(main, &t.update_available.replace("{}", &version), t.update_hint, NIIF_INFO);
+            }
+        }
+        update::Status::InstallFailed(_, f) => balloon(main, "QuickCopy", &t.update_failed.replace("{}", f.text()), NIIF_ERROR),
+        update::Status::Restarting => unsafe { PostQuitMessage(0) },
+        _ => {}
+    }
 }
 
 /// Icon resource ids (assets/quickcopy.rc).
@@ -1508,21 +1587,23 @@ fn tray_menu(main: HWND) {
     unsafe {
         let _ = GetCursorPos(&mut at);
     }
-    menu::show(
-        main,
-        at,
-        vec![
-            menu::Entry { label: t.settings.into(), id: MENU_SETTINGS, checked: false },
-            menu::Entry { label: t.pause.into(), id: MENU_PAUSE, checked: paused },
-            menu::Entry { label: t.quit.into(), id: MENU_QUIT, checked: false },
-        ],
-    );
+    let mut entries = Vec::new();
+    if let Some(r) = update::status().offer() {
+        entries.push(menu::Entry { label: t.update_to.replace("{}", &r.version.to_string()), id: MENU_UPDATE, checked: false });
+    }
+    entries.extend([
+        menu::Entry { label: t.settings.into(), id: MENU_SETTINGS, checked: false },
+        menu::Entry { label: t.pause.into(), id: MENU_PAUSE, checked: paused },
+        menu::Entry { label: t.quit.into(), id: MENU_QUIT, checked: false },
+    ]);
+    menu::show(main, at, entries);
 }
 
 /// A tray menu pick.
 fn tray_command(main: HWND, id: usize) {
     match id {
         MENU_SETTINGS => settings_ui::open(main),
+        MENU_UPDATE => update::install(),
         MENU_PAUSE => {
             with_app(|app| {
                 app.paused = !app.paused;
