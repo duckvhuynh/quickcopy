@@ -1,0 +1,72 @@
+name: Bug report
+description: QuickCopy read, selected or translated something wrong, or misbehaved.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Report security problems privately, as SECURITY.md describes, not here.
+        Remove anything private from screenshots before you attach them.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What QuickCopy read, selected or did, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ... in ...
+        2. Rest the cursor on ...
+        3. Drag over ...
+    validations:
+      required: true
+  - type: input
+    id: where
+    attributes:
+      label: App or web page
+      description: The app, browser or site that showed the image or video.
+      placeholder: Edge, https://example.com/page
+    validations:
+      required: true
+  - type: textarea
+    id: image
+    attributes:
+      label: Image
+      description: A screenshot of the image, if you can share it. It helps most.
+  - type: input
+    id: version
+    attributes:
+      label: QuickCopy version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      description: Run `winver` to see it.
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Vietnamese text recognition
+      options:
+        - "Off"
+        - "On"
+        - Model not installed
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Debug output
+      description: |
+        Optional. The output of `quickcopy --probe X Y | Out-Host` or
+        `quickcopy --uia X Y | Out-Host` in PowerShell, at a screen point on the image.
+      render: text

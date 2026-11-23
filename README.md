@@ -1,187 +1,291 @@
 # QuickCopy
 
-Live Text for Windows: rest the cursor on any image on screen and select the
-text inside it like normal text, then copy it with Ctrl+C or the right-click
-menu. Reads English and Vietnamese. Tested in Edge, Brave and Firefox (also
-Facebook's photo viewer), Electron apps such as Zalo, Photos, Media Player
-and VLC.
+[![CI](https://github.com/duckvhuynh/quickcopy/actions/workflows/ci.yml/badge.svg)](https://github.com/duckvhuynh/quickcopy/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/duckvhuynh/quickcopy)](https://github.com/duckvhuynh/quickcopy/releases/latest)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
-**Videos**: a paused video's frame is read like an image; a playing one is
-left alone. In web pages (Edge, Firefox) and desktop players (Media Player,
-VLC). A video counts as playing while its picture moves, or while its
-media session says so (Windows media sessions: a web video's is matched by
-its tab's title, a player's by the app), so a still picture with music is
-not read either. Pausing it (a click, the space key, a media key) brings up
-the overlay without moving the mouse: a playing video under the resting
-cursor is checked twice a second, which costs about 1-2% of one core.
-Playing it again hides the overlay within a second. Text the player draws
-over the picture (its control bar and time, a play button, captions, a
-title) is left out, so the overlay never takes the player's clicks.
+Select, copy and translate the text inside any image on your Windows screen.
 
-Selection works like native text: drag (it may start a little before or
-after a line), double-click a word, triple-click a line, Shift+click,
-Shift+arrows, Ctrl+Shift+arrows by word, Shift+Home/End, Ctrl+A. The
-selection stays until you click elsewhere or press Esc; other keys go back
-to the app underneath.
+QuickCopy is Live Text for Windows. Rest the cursor on an image, a
+screenshot or a paused video, and the text in it becomes selectable like
+normal text. Copy it with Ctrl+C or translate it in place. QuickCopy reads
+English and Vietnamese, and all text recognition runs on your PC. It is a
+0.8 MB Rust program with a tray icon, no UI framework and no GPU use.
 
-**Settings** (tray icon > Settings, or `quickcopy --settings`): start with
-Windows, the language translations go into (all of Google Translate's
-languages, searchable), the translate shortcut, the app language (English or
-Vietnamese) and Vietnamese text recognition. Saved in
-`%APPDATA%\QuickCopy\settings.json`. Regenerate the language list with
-`python tools/languages.py`.
+<!-- TODO: add a short GIF of selecting and translating text in an image,
+     saved as docs/images/demo.gif, and show it here:
+     ![Selecting and translating text in an image](docs/images/demo.gif) -->
 
-**Translate** (the shortcut, default Ctrl+T, or the selection menu): the selected
-text is translated with Google Translate and painted over the original in
-the same boxes, with sampled background and text colors, like Google Lens.
-Text already in Vietnamese is translated to English. Ctrl+C copies the
-translation; Esc shows the original again. This sends the selected text to
-Google, only when you ask. It uses the endpoint and public key of the Google
-Translate web client (not an official API; it may change). Set
-`QC_GOOGLE_KEY` to use your own key.
+## Features
 
-- 0.7 MB executable, no GPU. About 3 MB of private memory when idle, and
-  110-175 MB while the Vietnamese model is in use: it loads when an image is
-  read and unloads after an idle minute.
-- Rust + Win32, no UI framework. Runs in the tray (Settings, Pause, Quit);
-  starting it again opens the running copy's settings.
+- Reads text in images on web pages, in apps and in Electron apps that
+  expose no accessibility tree. Tested in Edge, Brave, Firefox, Facebook's
+  photo viewer, Zalo, Photos, Media Player and VLC.
+- Reads the frame of a paused video in a browser, in Media Player and in
+  VLC. A playing video is left alone.
+- Selects text like a text editor does: drag, double-click a word,
+  triple-click a line, Shift+click, Shift+arrows, Ctrl+A.
+- Keeps columns, tables and panes apart, so a drag down one column selects
+  only that column.
+- Translates the selection with Google Translate and paints the
+  translation over the original, in matching colors, like Google Lens.
+- Reads Vietnamese with tone marks through the optional VieSVTR model.
+- Follows the Windows light or dark mode and accent color. The app is in
+  English or Vietnamese.
+- Uses about 3 MB of private memory when idle.
+- Checks GitHub Releases for a new version once a day and installs it from
+  the tray menu.
 
-## How it works
+## Install
 
-1. When the cursor rests for 150 ms, UI Automation is asked what is under
-   it, which decides what gets read:
-   - an image element (web pages, most apps);
-   - a web page's `<video>`, which UI Automation shows as a plain group: the
-     IAccessible2 attributes say `tag:video` (`src/video.rs`);
-   - a picture an app draws in its own control, shown as an unnamed custom
-     element, pane or group with nothing inside, at least 100x60 (Photos'
-     image, VLC's video), or a child window of an app with a media session
-     (Media Player). Named canvases (Paint's: an editor, whose clicks stay
-     its own), top-level windows (games) and web page content are left
-     alone;
-   - in apps that expose no accessibility tree (Electron apps like Zalo),
-     the image rectangle found from pixels (`src/rectfind.rs`);
-   - on a web page where nothing exposed is under the cursor, a picture the
-     page leaves out of the tree (an `<img alt="">`, as in Facebook's photo
-     viewer, or a CSS background), also found from pixels. It is read only
-     if UI Automation, asked at 16 points across it, finds nothing of the
-     page's own there (text, links, images, controls), so a box of real
-     text is left alone.
-2. The image is captured with GDI, upscaled 2x and run through Windows OCR,
-   which finds the lines and words. Windows OCR skips some lines in tightly
-   stacked text (an underline just above the next line is enough), so what
-   still has letter strokes outside every word found is cut into lines, laid
-   out one under another with space around each, and read again
-   (`src/missed.rs`). Shapes it reads as letters (a chart's bars as `III`)
-   are dropped. The overlay appears right away, so text can be selected
-   while step 3 runs.
-3. In Vietnamese mode the lines are re-read by
-   [VieSVTR](https://huggingface.co/ngocthua830/viesvtr), because Windows OCR
-   has no Vietnamese recognizer (`src/viet.rs`). Where it was unsure of a
-   tone mark, the mark is picked by how often each syllable and pair of
-   syllables occurs in Vietnamese Wikipedia (`src/viet/lm.rs`). A copy made
-   before it finishes waits for it, so the clipboard always gets the
-   Vietnamese text.
-4. A transparent overlay is laid over the text lines only, so clicks elsewhere
-   on the image still reach the app underneath.
-5. Lines are grouped into blocks of lines stacked under one another: a
-   paragraph, a column, a table cell (`src/textmodel.rs`). A click goes to
-   the block it is in. A selection inside one block is everything between
-   its ends; across blocks it goes row after row within the width of the two
-   blocks, so dragging along a table row takes that row and dragging down
-   one pane of a window leaves the panes beside it alone.
-6. Results are cached by pixel hash. When a window comes to the front (an
-   image viewer opening), the image at its center is read ahead of time, so
-   it is ready when the cursor gets there.
+1. Download `QuickCopy-X.Y.Z-windows-x64.zip` from the
+   [latest release](https://github.com/duckvhuynh/quickcopy/releases/latest).
+2. Unzip it into any folder. QuickCopy needs no installer and no
+   administrator rights.
+3. Run `quickcopy.exe`. Its icon appears in the notification area.
 
-Measured on a 14-line Vietnamese page: overlay ~370 ms after the cursor
-rests on a new image (~200 ms on one already read), Vietnamese text ~500 ms.
+To start QuickCopy when you sign in, turn on **Start with Windows** in its
+settings.
 
-## Build
+### Verify the download
+
+Each release has a `SHA256SUMS.txt` file. In PowerShell, in the folder that
+holds the download, run this to compare the zip's hash with that file. It
+prints `True` when they match:
 
 ```powershell
+$zip = "QuickCopy-X.Y.Z-windows-x64.zip"
+$want = (Select-String -Path SHA256SUMS.txt -SimpleMatch $zip).Line.Split(" ")[0]
+(Get-FileHash $zip -Algorithm SHA256).Hash -eq $want
+```
+
+Each release file also has a build provenance attestation, made by the
+GitHub Actions workflow that built it. With the [GitHub CLI](https://cli.github.com/),
+run this to check that the file was built from this repository:
+
+```powershell
+gh attestation verify QuickCopy-X.Y.Z-windows-x64.zip --repo duckvhuynh/quickcopy
+```
+
+A release also has the executable on its own,
+`quickcopy-X.Y.Z-windows-x64.exe`. Verify it the same way. How releases
+are built is in [docs/release.md](docs/release.md).
+
+### Windows SmartScreen
+
+Release builds are not code-signed. The first time you run
+`quickcopy.exe`, Windows SmartScreen can show "Windows protected your PC".
+Verify the download first. Then select **More info** and **Run anyway**.
+
+### Vietnamese text recognition (optional)
+
+Windows OCR has no Vietnamese recognizer. To read Vietnamese with its tone
+marks, QuickCopy uses the [VieSVTR](https://huggingface.co/ngocthua830/viesvtr)
+model. The model is not included in QuickCopy. Its license is
+**CC BY-NC 4.0, which allows non-commercial use only**.
+
+1. Download `weights/viesvtr_v7.onnx` (30.7 MB) from
+   <https://huggingface.co/ngocthua830/viesvtr>.
+2. Save it as `models\viesvtr\viesvtr_v7.onnx` in the folder that holds
+   `quickcopy.exe`, or in a parent folder of it.
+3. Put `vi_syllables.bin` in the same `models\viesvtr` folder. It is in
+   this repository at
+   [models/viesvtr/vi_syllables.bin](models/viesvtr/vi_syllables.bin).
+   Without it, tone marks are read as the model reads them.
+4. On Windows 10, also put `onnxruntime.dll` version 1.17 or newer next to
+   `quickcopy.exe`. Windows 11 already has a copy in `System32`.
+5. Turn on **Vietnamese text recognition** in the settings.
+
+## Usage
+
+### Select and copy
+
+Rest the cursor on an image for a moment. QuickCopy reads it and lays a
+transparent overlay over its text lines. Clicks elsewhere on the image
+still go to the app underneath.
+
+- Drag over text to select it. The drag can start a little before or after
+  a line.
+- Double-click a word or triple-click a line.
+- Extend the selection with Shift+click, Shift+arrows, Ctrl+Shift+arrows,
+  Shift+Home and Shift+End. Select all with Ctrl+A.
+- Copy with Ctrl+C, Ctrl+Insert or the menu that appears next to the
+  selection.
+
+The selection stays until you click elsewhere or press Esc. Other keys go
+to the app underneath.
+
+### Translate
+
+Select text and press the translate shortcut (Ctrl+T by default), or pick
+**Translate** in the selection menu. The translation is painted over the
+original in the same boxes, with the background and text colors sampled
+from the image. Text already in the target language is translated to
+English, or to Vietnamese when English is the target. Ctrl+C copies the translation. Esc shows the original again.
+
+### Videos
+
+Pause a video and rest the cursor on it. The paused frame is read like an
+image. This works on web pages and in Media Player and VLC. A video counts
+as playing while its picture moves or while its Windows media session says
+it is playing, so a still picture with music is not read.
+
+You do not need to move the mouse after you pause. While the cursor rests on
+a playing video, QuickCopy checks it twice a second, which costs about 1-2%
+of one CPU core. The overlay appears after a pause and goes away within a
+second when the video plays again. Text that the player draws over the
+picture, such as its control bar, time and captions, is left out, so the
+overlay never takes the player's clicks.
+
+### Settings
+
+Open the settings from the tray icon (**Settings…**), by double-clicking the
+tray icon, or with `quickcopy --settings`. Starting `quickcopy.exe` again
+also opens the settings of the copy that is running.
+
+- **Start with Windows**.
+- **Translate into**: any of Google Translate's languages, with search.
+- **Translate shortcut**: Ctrl+T by default.
+- **App language**: English or Vietnamese.
+- **Vietnamese text recognition**: needs the VieSVTR model.
+- **Check for updates automatically**: the daily update check.
+
+Settings are saved in `%APPDATA%\QuickCopy\settings.json`. The Start with
+Windows setting is stored only in the `HKCU` Run key.
+
+### Tray icon
+
+Right-click the tray icon for **Settings…**, **Pause** and
+**Quit QuickCopy**. While QuickCopy is paused, it reads nothing.
+
+### Updates
+
+QuickCopy checks GitHub Releases for a newer version once a day. When one
+exists, the tray menu shows **Update to X.Y.Z**. Select it to download the
+new version. QuickCopy checks the download's SHA-256 hash before it
+installs it. Turn off **Check for updates automatically** in the settings
+to stop the daily check.
+
+## Privacy
+
+- All text recognition runs on your PC, with Windows OCR and, for
+  Vietnamese, the VieSVTR model. Images are never uploaded.
+- Translation sends the selected text to Google, and only when you ask for
+  a translation. QuickCopy uses the endpoint and public key of the Google
+  Translate web client. That is not an official Google API, and Google can
+  change or block it. Set the `QC_GOOGLE_KEY` environment variable to use
+  your own key.
+- The update check contacts `api.github.com` once a day. Turn off
+  **Check for updates automatically** to stop it.
+- QuickCopy sends nothing else and collects no usage data.
+
+## Requirements
+
+- Windows 10 or Windows 11, x64.
+- A Windows OCR language. QuickCopy uses the English (United States) OCR
+  language if it is installed, otherwise the OCR languages of your Windows
+  display languages. Adding English (United States) in **Settings** >
+  **Time & language** > **Language & region** installs it. To check which
+  OCR languages are installed, run this in PowerShell:
+
+  ```powershell
+  Get-WindowsCapability -Online -Name "Language.OCR*" | Where-Object State -eq Installed
+  ```
+
+- For Vietnamese only: the VieSVTR model and ONNX Runtime 1.17 or newer.
+  Windows 11 ships ONNX Runtime in `System32`. On Windows 10, put
+  `onnxruntime.dll` next to `quickcopy.exe`. See
+  [Vietnamese text recognition](#vietnamese-text-recognition-optional).
+
+## Build from source
+
+You need Rust 1.92 or newer with the `x86_64-pc-windows-msvc` toolchain,
+and the Visual Studio Build Tools with a Windows SDK. `build.rs` compiles
+the icon resources with the SDK's resource compiler.
+
+```powershell
+git clone https://github.com/duckvhuynh/quickcopy
+cd quickcopy
 cargo build --release
 ```
 
-### Vietnamese model (optional)
+The executable is `target\release\quickcopy.exe`. It finds the
+`models\viesvtr` folder of the repository, because it looks in the parent
+folders of the executable. Run the unit tests with `cargo test --release`.
 
-The model is not in this repository. Download
-`weights/viesvtr_v7.onnx` (30.7 MB) from
-<https://huggingface.co/ngocthua830/viesvtr> and place it at:
+## How it works
 
-```
-models/viesvtr/viesvtr_v7.onnx
-```
+When the cursor rests for 150 ms, QuickCopy asks UI Automation what is
+under it. Where UI Automation reports no image, as in Electron apps, it
+finds the image from pixels. It captures the image, upscales it 2x and
+reads it with Windows OCR. Lines that Windows OCR skips are cut out and
+read again. In Vietnamese mode, VieSVTR reads the lines again, and a table
+of syllable frequencies picks uncertain tone marks. A transparent overlay
+covers only the text lines. Lines are grouped into blocks, so a selection
+follows columns and table rows. Results are cached by pixel hash.
 
-next to the executable or in a parent folder of it. VieSVTR is licensed
-**CC BY-NC 4.0 (non-commercial use only)**.
+On a 14-line Vietnamese page, the overlay appears about 370 ms after the
+cursor rests on a new image (about 200 ms on an image already read), and
+the Vietnamese text is ready after about 500 ms.
 
-`models/viesvtr/vi_syllables.bin` (5.5 MB, in the repository) goes next to
-it: syllable and pair frequencies that pick tone marks, loaded and freed
-with the model (about 12 MB while loaded). Without it lines are read as the
-model reads them. It is counted from Vietnamese Wikipedia (text CC BY-SA
-4.0) by `tools/vietlm/build.py`, which says how to rebuild it.
-
-ONNX Runtime is loaded at runtime: `onnxruntime.dll` next to the executable
-if present, otherwise the copy Windows 11 ships in `System32`. On Windows 10,
-put an `onnxruntime.dll` (1.17 or newer) next to the executable.
-
-## Debugging
-
-```powershell
-quickcopy --ocr-file image.png   # OCR an image file, print text and word boxes
-quickcopy --probe X Y            # detect and OCR the image at a screen point
-quickcopy --layout image.png     # lines in reading order, with their blocks
-quickcopy --uia X Y              # what UI Automation and IAccessible2 report at a point
-quickcopy --drag image.png X0 Y0 X1 Y1   # what a drag between two points selects
-```
-
-`tools/corpus/` checks that the text in about 70 images is read: real
-screenshots, documents, photos of print and Vietnamese text from the web
-(downloaded by `fetch.py`, not kept in git), and pages made for the hard
-cases (`gen_synth.py`). `run_corpus.py <exe>` prints the phrases each image
-missed and a total; see its README.
-
-`tools/selection/` tests selection on many layouts (a two-column article, a
-table, forms, a chat, a dashboard, a receipt, code, a three-pane issue
-tracker). `gen_layouts.py <dir>` renders them with headless Edge and writes
-one case per marked element (drag over it, expect its text);
-`run_cases.py <exe> <dir>/cases.json` runs them through `--drag`;
-`viz_layout.py` draws the blocks on an image.
-
-Debug builds log to the console. Release builds log to stderr when `QC_LOG`
-is set. `QC_ENGLISH=1` forces Windows OCR only. `QC_THEME=light` or `dark`
-overrides the Windows app mode (the UI otherwise follows it and the accent
-color).
-
-The icons in `assets/` are built from the PNG masters with
-`python tools/icons.py`.
-
-`cargo test --release bench_ -- --ignored --nocapture` prints what screen
-captures, Direct2D, the OCR engines and translation requests cost in time
-and memory on this machine.
+The details, with the source file for each step, are in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The test tools and debug
+flags are in [docs/TESTING.md](docs/TESTING.md).
 
 ## Known limitations
 
-- Images drawn on wallpapers or with edges close to the background color may
-  not be found in Electron apps.
-- OCR gives a box per word, not per letter: a selection that starts or ends
-  inside a word places the caret by dividing the word's box evenly, so it
-  can be a letter off in proportional fonts.
+- Not every app can be read. QuickCopy cannot read pictures that an app
+  draws without telling UI Automation (top-level windows drawn by hand, as
+  in games), named canvases in editors such as Paint, thumbnails inside
+  list items (Media Player's library, File Explorer), DRM-protected video
+  (Netflix shows black to screen captures), and windows that run as
+  administrator. Classic Windows Media Player was not tested.
+- In Electron apps, images on wallpapers or with edges close to the
+  background color may not be found.
+- OCR gives a box per word, not per letter. A selection that starts or ends
+  inside a word divides the word's box evenly, so the caret can be a letter
+  off in proportional fonts.
 - Select all reads block after block. For a table whose columns are far
-  apart that is column by column; dragging over its rows reads row by row.
-- A single click on a word inside the image is taken by the overlay, so image
-  links do not open when clicked exactly on their text.
-- Content behind DRM or windows running as administrator cannot be read.
-- Not every app can be read. Pictures an app draws without telling UI
-  Automation anything (a top-level window drawn by hand, as games are), a
-  named canvas (editors such as Paint), thumbnails inside list items (Media
-  Player's library, File Explorer), DRM-protected video (Netflix, which
-  shows black to screen captures) and windows running as administrator are
-  not read. Classic Windows Media Player was not tested.
+  apart, that is column by column. A drag over its rows reads row by row.
+- A single click on a word inside an image goes to the overlay, so an image
+  link does not open when you click exactly on its text.
 - A muted video whose picture does not move counts as paused.
 - Over a paused video, picture text between the buttons of a control bar,
-  or under one of the player's controls or captions, is left out with them.
-- A video with a still picture that has only just started playing (under a
-  second) can count as paused until Windows lists its media session; the
-  overlay, still invisible, goes away at the next check (0.3 s).
+  or under the player's controls or captions, is left out with them.
+- A video with a still picture that started playing less than a second ago
+  can count as paused until Windows lists its media session. The overlay,
+  still invisible, goes away at the next check, 0.3 s later.
+
+## Roadmap
+
+- Linux support. The plan is in [docs/linux.md](docs/linux.md).
+
+## Contributing
+
+Bug reports, test images and pull requests are welcome. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and send a
+change. Report security problems privately, as described in
+[SECURITY.md](SECURITY.md). Everyone taking part follows the
+[code of conduct](CODE_OF_CONDUCT.md).
+
+## License
+
+QuickCopy's code is licensed under either of these, at your option:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in QuickCopy by you, as defined in the Apache-2.0
+license, shall be dual licensed as above, without any additional terms or
+conditions.
+
+These parts have their own licenses:
+
+- The VieSVTR model is CC BY-NC 4.0. It is not in this repository or in
+  releases.
+- `models/viesvtr/vi_syllables.bin` is counted from Vietnamese Wikipedia
+  and is licensed CC BY-SA 4.0.
+
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) lists these and every Rust
+crate QuickCopy uses, with their licenses.
