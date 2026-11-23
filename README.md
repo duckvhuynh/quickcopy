@@ -1,9 +1,15 @@
 # QuickCopy
 
-Live Text for Windows: rest the cursor on any image on screen, then
-double-click a word, triple-click a line, or drag across text to copy it.
-Works in browsers and in Electron apps such as Zalo. Reads English and
+Live Text for Windows: rest the cursor on any image on screen and select the
+text inside it like normal text, then copy it with Ctrl+C or the right-click
+menu. Works in browsers and in Electron apps such as Zalo. Reads English and
 Vietnamese.
+
+Selection works like native text: drag (it may start a little before or
+after a line), double-click a word, triple-click a line, Shift+click,
+Shift+arrows, Ctrl+Shift+arrows by word, Shift+Home/End, Ctrl+A. The
+selection stays until you click elsewhere or press Esc; other keys go back
+to the app underneath.
 
 - ~330 KB executable, no GPU, ~3 MB RAM idle (~90 MB while the Vietnamese
   model is loaded; it unloads after 5 idle minutes).
