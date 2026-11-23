@@ -256,6 +256,9 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let updated = args.iter().any(|a| a == "--updated");
+    if updated {
+        update::signal_started();
+    }
     if !only_instance(updated) {
         return Ok(());
     }

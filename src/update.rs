@@ -3,7 +3,8 @@
 //! A release is tagged vX.Y.Z and carries `quickcopy-X.Y.Z-windows-x64.exe`
 //! and `SHA256SUMS.txt` (`<sha256 hex>  <file name>` lines). Installing
 //! downloads both, checks the exe's SHA-256, puts it in place of the running
-//! exe (which is renamed to `.old`), starts it with `--updated` and quits.
+//! exe (which is renamed to `.old`), starts it with `--updated` and quits
+//! once it reports that it runs; if it does not, the old exe is put back.
 //! The new process waits for this one's single-instance mutex, then deletes
 //! the `.old` file.
 //!
@@ -19,7 +20,9 @@ use std::time::{Duration, SystemTime};
 use serde::Deserialize;
 use windows::Win32::Foundation::*;
 use windows::Win32::Security::Cryptography::{BCRYPT_SHA256_ALG_HANDLE, BCryptHash};
+use windows::Win32::System::Threading::{CreateEventW, GetCurrentProcessId, SetEvent, WaitForSingleObject};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
+use windows::core::HSTRING;
 
 use crate::worker::log;
 
@@ -33,8 +36,8 @@ const INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// How often the background thread wakes to see if a check is due. Sleep
 /// does not count while the PC sleeps, so waking often keeps checks daily.
 const TICK: Duration = Duration::from_secs(15 * 60);
-/// How long the new version must stay up before this one gives way.
-const LAUNCH_GRACE: Duration = Duration::from_secs(2);
+/// How long the new version has to report that it runs.
+const START_TIMEOUT_MS: u32 = 10_000;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Version(u32, u32, u32);
@@ -376,6 +379,21 @@ pub fn install() {
     });
 }
 
+fn started_event(pid: u32) -> HSTRING {
+    HSTRING::from(format!("QuickCopy.Updated.{pid}"))
+}
+
+/// Run first by an exe started with `--updated`: tells the process that
+/// installed it that it runs. The event stays open for the life of the
+/// process, so it is there whenever the installer opens it.
+pub fn signal_started() {
+    unsafe {
+        if let Ok(event) = CreateEventW(None, true, false, &started_event(GetCurrentProcessId())) {
+            let _ = SetEvent(event);
+        }
+    }
+}
+
 fn install_release(r: &Release) -> Result<(), Failure> {
     let exe = std::env::current_exe().or_else(|e| fail(Failure::Files, e))?;
     let data = download(&r.exe.url)?;
@@ -384,19 +402,30 @@ fn install_release(r: &Release) -> Result<(), Failure> {
     verify(&data, &String::from_utf8_lossy(&sums), &r.exe.name).or_else(|e| fail(Failure::HashMismatch, e))?;
     swap(&exe, &data).or_else(|e| fail(Failure::Files, format!("replacing {}: {e}", exe.display())))?;
     log(format!("update: installed {} at {}", r.version, exe.display()));
-    // The new process waits for our mutex, so it must still be running
-    // after a moment; one that quit (crashed) is replaced by the old exe.
-    let running = match std::process::Command::new(&exe).arg("--updated").spawn() {
+    // The new exe says it runs (`signal_started`) before it waits for our
+    // mutex; one that does not (it crashed, or is not QuickCopy) is replaced
+    // by the old exe.
+    let started = match std::process::Command::new(&exe).arg("--updated").spawn() {
         Ok(mut child) => {
-            std::thread::sleep(LAUNCH_GRACE);
-            matches!(child.try_wait(), Ok(None))
+            let started = unsafe {
+                CreateEventW(None, true, false, &started_event(child.id())).is_ok_and(|event| {
+                    let signaled = WaitForSingleObject(event, START_TIMEOUT_MS) == WAIT_OBJECT_0;
+                    let _ = CloseHandle(event);
+                    signaled
+                })
+            };
+            if !started {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            started
         }
         Err(e) => {
             log(format!("update: starting {}: {e}", exe.display()));
             false
         }
     };
-    if running {
+    if started {
         return Ok(());
     }
     if let Err(e) = rollback(&exe) {
