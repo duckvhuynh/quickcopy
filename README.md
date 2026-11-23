@@ -48,7 +48,13 @@ Translate web client (not an official API; it may change). Set
    finishes waits for it, so the clipboard always gets the Vietnamese text.
 4. A transparent overlay is laid over the text lines only, so clicks elsewhere
    on the image still reach the app underneath.
-5. Results are cached by pixel hash. When a window comes to the front (an
+5. Lines are grouped into blocks of lines stacked under one another: a
+   paragraph, a column, a table cell (`src/textmodel.rs`). A click goes to
+   the block it is in. A selection inside one block is everything between
+   its ends; across blocks it goes row after row within the width of the two
+   blocks, so dragging along a table row takes that row and dragging down
+   one pane of a window leaves the panes beside it alone.
+6. Results are cached by pixel hash. When a window comes to the front (an
    image viewer opening), the image at its center is read ahead of time, so
    it is ready when the cursor gets there.
 
@@ -83,7 +89,16 @@ put an `onnxruntime.dll` (1.17 or newer) next to the executable.
 ```powershell
 quickcopy --ocr-file image.png   # OCR an image file, print text and word boxes
 quickcopy --probe X Y            # detect and OCR the image at a screen point
+quickcopy --layout image.png     # lines in reading order, with their blocks
+quickcopy --drag image.png X0 Y0 X1 Y1   # what a drag between two points selects
 ```
+
+`tools/selection/` tests selection on many layouts (a two-column article, a
+table, forms, a chat, a dashboard, a receipt, code, a three-pane issue
+tracker). `gen_layouts.py <dir>` renders them with headless Edge and writes
+one case per marked element (drag over it, expect its text);
+`run_cases.py <exe> <dir>/cases.json` runs them through `--drag`;
+`viz_layout.py` draws the blocks on an image.
 
 Debug builds log to the console. Release builds log to stderr when `QC_LOG`
 is set. `QC_ENGLISH=1` forces Windows OCR only. `QC_THEME=light` or `dark`
@@ -101,6 +116,11 @@ and memory on this machine.
 
 - Images drawn on wallpapers or with edges close to the background color may
   not be found in Electron apps.
+- OCR gives a box per word, not per letter: a selection that starts or ends
+  inside a word places the caret by dividing the word's box evenly, so it
+  can be a letter off in proportional fonts.
+- Select all reads block after block. For a table whose columns are far
+  apart that is column by column; dragging over its rows reads row by row.
 - A single click on a word inside the image is taken by the overlay, so image
   links do not open when clicked exactly on their text.
 - Content behind DRM or windows running as administrator cannot be read.

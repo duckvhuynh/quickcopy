@@ -6,6 +6,11 @@
 //!   quickcopy                 run in the tray
 //!   quickcopy --probe X Y     OCR the image at screen point (X, Y) and print it
 //!   quickcopy --ocr-file F    OCR an image file and print text and word boxes
+//!   quickcopy --drag F X0 Y0 X1 Y1 ...
+//!                             print what dragging from (X0, Y0) to (X1, Y1)
+//!                             in image file F selects; several drags allowed
+//!   quickcopy --layout F      print the lines of image file F in reading
+//!                             order, with the block each belongs to
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -138,6 +143,19 @@ fn vietnamese_wanted() -> bool {
     settings::get().vietnamese_ocr && viet::model_path().is_some() && std::env::var_os("QC_ENGLISH").is_none()
 }
 
+/// Test helper: reads an image file and prints the text each drag between
+/// two points (image pixels, four numbers per drag) selects.
+fn drag_file(path: &str, points: &[String]) -> Result<()> {
+    let (_, _, words) = worker::read_file(path)?;
+    let model = TextModel::new(&words, &worker::line_rects(&words));
+    for drag in points.chunks_exact(4) {
+        let n: Vec<i32> = drag.iter().map(|v| v.parse().expect("coordinates must be integers")).collect();
+        let (from, to) = (model.hit(POINT { x: n[0], y: n[1] }), model.hit(POINT { x: n[2], y: n[3] }));
+        println!("({}, {}) -> ({}, {}): {:?}", n[0], n[1], n[2], n[3], model.text(from, to));
+    }
+    Ok(())
+}
+
 /// True if this is the only running QuickCopy. A second launch would put a
 /// second overlay and tray icon over the first; it opens the running one's
 /// settings instead (what launching the app again is for) and exits.
@@ -173,6 +191,17 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() == 3 && args[1] == "--ocr-file" {
         return worker::ocr_file(&args[2]);
+    }
+    if args.len() == 3 && args[1] == "--layout" {
+        let (_, _, words) = worker::read_file(&args[2])?;
+        let model = TextModel::new(&words, &worker::line_rects(&words));
+        for (line, (&(s, e), r)) in model.lines.iter().zip(&model.line_rects).enumerate() {
+            println!("block {} line {line} x {}..{} y {}..{} {}", model.block_of(line), r.left, r.right, r.top, r.bottom, model.text(s, e));
+        }
+        return Ok(());
+    }
+    if args.len() >= 7 && args[1] == "--drag" {
+        return drag_file(&args[2], &args[3..]);
     }
     if args.len() == 4 && args[1] == "--probe" {
         let x = args[2].parse().expect("X must be an integer");
@@ -521,10 +550,7 @@ fn apply_update(app: &mut App, data: OcrData) {
     }
     let model = TextModel::new(&data.words, &data.lines);
     if let Some(old) = &app.model {
-        let remap = |o: usize| {
-            let (line, x) = old.pos_of(o);
-            model.offset_at(line.min(model.lines.len().saturating_sub(1)), x)
-        };
+        let remap = |o: usize| model.hit(old.point_of(o));
         app.anchor = remap(app.anchor);
         app.focus = remap(app.focus);
     }

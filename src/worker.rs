@@ -365,7 +365,7 @@ impl Detector {
             }
             out.push(boxes);
         }
-        Ok(out)
+        Ok(join_rows(out))
     }
 
     /// Re-reads every line with VieSVTR, which knows the tone marks Windows
@@ -563,9 +563,24 @@ pub fn probe(pt: POINT) -> Result<()> {
     Ok(())
 }
 
-/// OCRs an image file (upscaled 2x like screen captures) and prints the text
-/// and word boxes. Used for testing without driving the screen.
+/// OCRs an image file and prints the text and word boxes. Used for testing
+/// without driving the screen.
 pub fn ocr_file(path: &str) -> Result<()> {
+    let t0 = Instant::now();
+    let (w, h, words) = read_file(path)?;
+    println!("{}x{}, {} words in {:?}", w, h, words.len(), t0.elapsed());
+    let all: Vec<usize> = (0..words.len()).collect();
+    println!("--- text ---\n{}\n--- word boxes ---", crate::selection_text(&words, &all));
+    for word in &words {
+        let b = word.rect;
+        println!("line {} x {}..{} y {}..{} {}", word.line, b.left, b.right, b.top, b.bottom, word.text);
+    }
+    Ok(())
+}
+
+/// The words in an image file (upscaled 2x like screen captures), in the
+/// image's own pixels, with its size.
+pub fn read_file(path: &str) -> Result<(u32, u32, Vec<Word>)> {
     use windows::Graphics::Imaging::*;
     use windows::Storage::{FileAccessMode, StorageFile};
     unsafe {
@@ -592,16 +607,8 @@ pub fn ocr_file(path: &str) -> Result<()> {
         )?
         .join()?;
     let pixels = data.DetachPixelData()?.to_vec();
-    let t0 = Instant::now();
     let words = detector.ocr_pixels(&pixels, (w * 2) as i32, (h * 2) as i32, 2.0)?;
-    println!("{}x{}, {} words in {:?}", w, h, words.len(), t0.elapsed());
-    let all: Vec<usize> = (0..words.len()).collect();
-    println!("--- text ---\n{}\n--- word boxes ---", crate::selection_text(&words, &all));
-    for word in &words {
-        let b = word.rect;
-        println!("line {} x {}..{} y {}..{} {}", word.line, b.left, b.right, b.top, b.bottom, word.text);
-    }
-    Ok(())
+    Ok((w, h, words))
 }
 
 /// Clips the element rect to the window under the cursor and the virtual screen,
@@ -677,6 +684,47 @@ fn image_from_pixels(pt: POINT) -> Result<Option<RECT>> {
 /// left, top, right, bottom in capture pixels.
 type Box4 = (f32, f32, f32, f32);
 
+/// Puts back together what Windows OCR reports as separate lines but is one
+/// line on screen: pieces on one row a few characters apart (the text around
+/// an inline code chip, a line of code cut at a space), or overlapping (a
+/// long line it read in two halves, with the word at the cut in both).
+/// Pieces further apart stay lines of their own: table cells, columns, a
+/// label and its value.
+fn join_rows(lines: Vec<Vec<(Box4, String)>>) -> Vec<Vec<(Box4, String)>> {
+    let bounds = |line: &[(Box4, String)]| line.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |a, (b, _)| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)));
+    let mut out: Vec<Vec<(Box4, String)>> = Vec::new();
+    for line in lines.into_iter().filter(|l| !l.is_empty()) {
+        let b = bounds(&line);
+        let same_line = out.iter_mut().find(|other| {
+            let o = bounds(other);
+            let (h, oh) = (b.3 - b.1, o.3 - o.1);
+            let shared = b.3.min(o.3) - b.1.max(o.1);
+            // Negative when the two overlap sideways.
+            let gap = (b.0 - o.2).max(o.0 - b.2);
+            shared > 0.6 * h.min(oh) && gap < 1.5 * h.max(oh)
+        });
+        match same_line {
+            Some(other) => {
+                other.extend(line);
+                other.sort_by(|p, q| p.0.0.total_cmp(&q.0.0));
+                // A word read twice at the cut: keep the wider reading.
+                let mut i = 1;
+                while i < other.len() {
+                    let (p, q) = (other[i - 1].0, other[i].0);
+                    let (pw, qw) = (p.2 - p.0, q.2 - q.0);
+                    if p.2.min(q.2) - p.0.max(q.0) > 0.5 * pw.min(qw) {
+                        other.remove(if pw < qw { i - 1 } else { i });
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            None => out.push(line),
+        }
+    }
+    out
+}
+
 /// A text line cut out of the capture for VieSVTR.
 struct Crop {
     px: Vec<u8>,
@@ -740,11 +788,36 @@ fn words_from_chars(crop: &Crop, chars: &[viet::RecChar], boxes: &[(Box4, String
         });
     }
     flush(&mut word, &mut span);
-    // CTC spans are a little narrow; when both engines split the line into the
-    // same number of words, Windows OCR's boxes are the better outlines.
+    // CTC spans end at a character's peak, short of its ink: words boxed by
+    // them were highlighted a few pixels short, and a drag starting on a
+    // word's first letter missed it. Windows OCR's boxes are the outlines.
+    // With the same number of words on both sides they are used as they are.
+    // Otherwise each gap between two words here is moved onto the gap
+    // Windows OCR measured there (the two engines rarely disagree on more
+    // than a split or two per line), or failing that the words meet halfway.
+    // The outer words reach the line's ends as Windows OCR saw them, unless
+    // it read something there that this reading lacks (a bullet, a checkbox).
     if out.len() == boxes.len() {
         for (o, (b, _)) in out.iter_mut().zip(boxes) {
             o.0 = *b;
+        }
+    } else if let (Some(first), Some(last)) = (out.first(), out.last()) {
+        // The spans fall at most about half a line height short.
+        let reach = 0.6 * (b - t).max(1.0);
+        let (line_left, line_right) = boxes.iter().fold((f32::MAX, f32::MIN), |a, (bx, _)| (a.0.min(bx.0), a.1.max(bx.2)));
+        let left = if first.0.0 - line_left < reach { line_left } else { first.0.0 };
+        let right = if line_right - last.0.2 < reach { line_right } else { last.0.2 };
+        // (right edge of the word before, left edge of the word after)
+        let measured: Vec<(f32, f32)> = boxes.windows(2).map(|pair| (pair[0].0.2, pair[1].0.0)).filter(|(r, l)| l >= r).collect();
+        let mut edges = vec![(left, left)];
+        edges.extend(out.windows(2).map(|pair| {
+            let middle = (pair[0].0.2 + pair[1].0.0) / 2.0;
+            let off = |gap: &(f32, f32)| (gap.0 - middle).max(middle - gap.1).max(0.0);
+            measured.iter().copied().min_by(|p, q| off(p).total_cmp(&off(q))).filter(|gap| off(gap) < reach).unwrap_or((middle, middle))
+        }));
+        edges.push((right, right));
+        for (o, edge) in out.iter_mut().zip(edges.windows(2)) {
+            (o.0.0, o.0.2) = (edge[0].1, edge[1].0.max(edge[0].1 + 1.0));
         }
     }
     out
@@ -940,6 +1013,57 @@ pub fn log(msg: String) {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *ENABLED.get_or_init(|| cfg!(debug_assertions) || std::env::var_os("QC_LOG").is_some()) {
         eprintln!("[quickcopy] {msg}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn piece(l: f32, t: f32, r: f32, b: f32, text: &str) -> (Box4, String) {
+        ((l, t, r, b), text.to_string())
+    }
+
+    fn texts(lines: &[Vec<(Box4, String)>]) -> Vec<String> {
+        lines.iter().map(|l| l.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join(" ")).collect()
+    }
+
+    #[test]
+    fn pieces_of_one_line_are_joined_but_columns_are_not() {
+        let lines = vec![
+            // A line cut at a space, its second piece reported later.
+            vec![piece(135.0, 130.0, 434.0, 144.0, "order.id,")],
+            vec![piece(105.0, 174.0, 326.0, 188.0, "total")],
+            vec![piece(443.0, 130.0, 542.0, 144.0, "order.price);")],
+            // Two labels on one row, three line heights apart.
+            vec![piece(65.0, 480.0, 250.0, 497.0, "created")],
+            vec![piece(296.0, 480.0, 467.0, 497.0, "assigned")],
+        ];
+        assert_eq!(texts(&join_rows(lines)), ["order.id, order.price);", "total", "created", "assigned"]);
+    }
+
+    #[test]
+    fn a_word_read_twice_where_a_long_line_was_cut_is_kept_once() {
+        let lines = vec![
+            vec![piece(366.0, 482.0, 700.0, 496.0, "pwsh"), piece(760.0, 482.0, 782.0, 496.0, "-Fi")],
+            vec![piece(763.0, 482.0, 800.0, 496.0, "-File"), piece(810.0, 482.0, 900.0, 496.0, "run.ps1")],
+        ];
+        assert_eq!(texts(&join_rows(lines)), ["pwsh -File run.ps1"]);
+    }
+
+    #[test]
+    fn vietnamese_words_cover_the_line_when_the_engines_split_it_differently() {
+        // Windows OCR: three words from 100 to 400. The model: two words,
+        // its spans a few pixels short at every end.
+        let crop = Crop { px: Vec::new(), w: 320, h: 20, x0: 90, top: 10.0, bottom: 26.0 };
+        let chars: Vec<viet::RecChar> = [('a', 0.04, 0.28), (' ', 0.3, 0.3), ('b', 0.33, 0.94)].iter().map(|&(ch, x0, x1)| viet::RecChar { ch, x0, x1 }).collect();
+        let windows = [piece(100.0, 10.0, 180.0, 26.0, "x"), piece(190.0, 10.0, 220.0, 26.0, "y"), piece(230.0, 10.0, 400.0, 26.0, "z")];
+        let words = words_from_chars(&crop, &chars, &windows);
+        assert_eq!(words.len(), 2);
+        // The ends reach the line's ends, and the gap between the two words
+        // is the one Windows OCR measured nearest to it.
+        assert_eq!((words[0].0.0, words[0].0.2), (100.0, 180.0));
+        assert_eq!((words[1].0.0, words[1].0.2), (190.0, 400.0));
     }
 }
 
