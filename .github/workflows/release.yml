@@ -1,0 +1,144 @@
+name: Release
+
+# Push a tag vX.Y.Z matching Cargo.toml's version. The job builds, signs (when
+# signing is configured), packages, attests and creates a DRAFT release; a
+# maintainer reviews and publishes it. See docs/release.md.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write     # create the release and upload assets
+  id-token: write     # OIDC token for the provenance attestation
+  attestations: write # store the attestation
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # Secrets cannot appear in `if:`; these say whether signing is set up.
+  HAS_AZURE_SIGNING: ${{ secrets.AZURE_CLIENT_ID != '' }}
+  HAS_SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check tag matches Cargo.toml
+        id: version
+        shell: pwsh
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "Tag $env:GITHUB_REF_NAME does not match Cargo.toml version $version (expected v$version)"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Test
+        run: cargo test --release --locked
+
+      # Signing happens before packaging so the zip, the bare exe and the
+      # hashes all carry the signed exe. Azure wins if both are configured.
+      - name: Sign with Azure Artifact Signing
+        if: env.HAS_AZURE_SIGNING == 'true'
+        uses: Azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
+          files: ${{ github.workspace }}\target\release\quickcopy.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: QuickCopy
+          description-url: https://github.com/${{ github.repository }}
+
+      - name: Upload exe for SignPath
+        id: unsigned
+        if: env.HAS_SIGNPATH == 'true' && env.HAS_AZURE_SIGNING != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-exe
+          path: target/release/quickcopy.exe
+          if-no-files-found: error
+
+      - name: Sign with SignPath
+        if: env.HAS_SIGNPATH == 'true' && env.HAS_AZURE_SIGNING != 'true'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: quickcopy
+          signing-policy-slug: release-signing
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Use the SignPath-signed exe
+        if: env.HAS_SIGNPATH == 'true' && env.HAS_AZURE_SIGNING != 'true'
+        shell: pwsh
+        run: Copy-Item signed/quickcopy.exe target/release/quickcopy.exe -Force
+
+      - name: Check signature
+        if: env.HAS_AZURE_SIGNING == 'true' || env.HAS_SIGNPATH == 'true'
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature target/release/quickcopy.exe
+          if ($sig.Status -ne 'Valid') { throw "quickcopy.exe signature: $($sig.Status) $($sig.StatusMessage)" }
+          "Signed by $($sig.SignerCertificate.Subject)"
+
+      - name: Package
+        shell: pwsh
+        run: ./scripts/package.ps1 -NoBuild
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/*
+
+      - name: Create draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $assets = @(Get-ChildItem dist -File | ForEach-Object FullName)
+
+          # Notes: the CHANGELOG.md section "## [X.Y.Z]" up to the next "## [",
+          # without Keep a Changelog's link references.
+          $notes = ''
+          if (Test-Path CHANGELOG.md) {
+            $lines = Get-Content CHANGELOG.md
+            $heading = $lines | Select-String -Pattern "^## \[$([regex]::Escape($env:VERSION))\]" | Select-Object -First 1
+            if ($heading) {
+              $rest = @($lines | Select-Object -Skip $heading.LineNumber)
+              $next = $rest | Select-String -Pattern '^## \[' | Select-Object -First 1
+              if ($next) { $rest = @($rest | Select-Object -First ($next.LineNumber - 1)) }
+              $notes = (($rest | Where-Object { $_ -notmatch '^\[[^\]]+\]:\s' }) -join "`n").Trim()
+            }
+          }
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            # A re-run of this workflow: refresh the assets on the draft.
+            gh release upload $tag @assets --clobber
+          } elseif ($notes) {
+            $file = Join-Path $env:RUNNER_TEMP 'notes.md'
+            [IO.File]::WriteAllText($file, $notes + "`n")
+            gh release create $tag @assets --draft --verify-tag --title "QuickCopy $env:VERSION" --notes-file $file
+          } else {
+            gh release create $tag @assets --draft --verify-tag --title "QuickCopy $env:VERSION" --generate-notes
+          }
