@@ -4,6 +4,8 @@
 //! `refresh` re-reads the system; call it when a surface is shown or when
 //! Windows broadcasts a color change.
 
+#![cfg(windows)]
+
 use std::sync::RwLock;
 
 use windows::Win32::System::Registry::*;

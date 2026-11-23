@@ -5,6 +5,8 @@
 //! It also matches the original text's look: `match_style` finds the font
 //! weight and size whose rendering measures like the text in the image.
 
+#![cfg(windows)]
+
 use std::cell::OnceCell;
 use std::ffi::c_void;
 

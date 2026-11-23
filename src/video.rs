@@ -8,6 +8,8 @@
 //! (music over cover art), by the system's media sessions: a web video's by
 //! its tab's title, a desktop player's by the app (`Media`).
 
+#![cfg(windows)]
+
 #![allow(non_snake_case)]
 
 use std::cell::OnceCell;

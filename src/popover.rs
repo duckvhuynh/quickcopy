@@ -3,6 +3,8 @@
 //! focus (the overlay keeps it, so the shortcuts keep working), drawn with
 //! Direct2D in the app's dark theme (theme.rs) and scaled to the monitor.
 
+#![cfg(windows)]
+
 
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;

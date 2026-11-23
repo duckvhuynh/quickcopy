@@ -14,9 +14,15 @@
 //! selects that row, and dragging down one pane of a window leaves the
 //! panes beside it alone.
 
-use windows::Win32::Foundation::{POINT, RECT};
+use crate::common::{POINT, RECT};
 
-use crate::worker::Word;
+#[derive(Clone)]
+pub struct Word {
+    /// Relative to the top-left of `OcrData::rect`.
+    pub rect: RECT,
+    pub text: String,
+    pub line: usize,
+}
 
 #[derive(Debug, Clone)]
 pub struct Ch {

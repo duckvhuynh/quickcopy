@@ -7,16 +7,22 @@
 //! user asks for a translation.
 
 use std::collections::HashMap;
+#[cfg(windows)]
 use std::ffi::c_void;
 use std::sync::Mutex;
 
+#[cfg(windows)]
 use windows::Win32::Foundation::*;
+#[cfg(windows)]
 use windows::Win32::Networking::WinHttp::*;
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
+#[cfg(windows)]
 use windows::core::*;
 
-use crate::worker::log;
+use crate::common::{RECT, log};
 
+#[cfg(windows)]
 pub const WM_APP_TRANSLATED: u32 = WM_APP + 4; // lparam = Box<Translated>
 
 const HOST: &str = "translate-pa.googleapis.com";
@@ -55,6 +61,7 @@ pub struct Translated {
 
 /// Translates the selected `lines` (reading order) on a background thread and
 /// posts `WM_APP_TRANSLATED` to `hwnd`. `clip` is the image's screen rect.
+#[cfg(windows)]
 pub fn spawn(hwnd: HWND, request: u64, clip: RECT, target: String, lines: Vec<Line>) {
     let hwnd = hwnd.0 as isize;
     std::thread::spawn(move || {
@@ -68,6 +75,7 @@ pub fn spawn(hwnd: HWND, request: u64, clip: RECT, target: String, lines: Vec<Li
     });
 }
 
+#[cfg(windows)]
 fn run(clip: RECT, target: &str, lines: Vec<Line>) -> std::result::Result<Vec<UnitResult>, String> {
     let (w, h) = (clip.right - clip.left, clip.bottom - clip.top);
     let pixels = crate::worker::capture(clip, w, h).map_err(|e| e.to_string())?;
@@ -252,8 +260,10 @@ fn encode(s: &str) -> String {
     out
 }
 
+#[cfg(windows)]
 struct Handle(*mut c_void);
 
+#[cfg(windows)]
 impl Drop for Handle {
     fn drop(&mut self) {
         if !self.0.is_null() {
@@ -265,8 +275,10 @@ impl Drop for Handle {
 }
 
 // WinHTTP handles may be used from any thread.
+#[cfg(windows)]
 unsafe impl Send for Handle {}
 
+#[cfg(windows)]
 fn check(h: *mut c_void) -> Result<Handle> {
     if h.is_null() { Err(Error::from_thread()) } else { Ok(Handle(h)) }
 }
@@ -276,6 +288,7 @@ fn check(h: *mut c_void) -> Result<Handle> {
 /// proxy detection, DNS and the TLS handshake each time (measured: three
 /// requests took 0.4-2.9 s one after another on sessions of their own, and
 /// 0.14 s sent together on this one).
+#[cfg(windows)]
 fn connection() -> Result<*mut c_void> {
     static SHARED: Mutex<Option<(Handle, Handle)>> = Mutex::new(None);
     let mut shared = SHARED.lock().unwrap();
@@ -293,6 +306,7 @@ fn connection() -> Result<*mut c_void> {
 }
 
 /// HTTPS GET with WinHTTP (built into Windows: no TLS library to ship).
+#[cfg(windows)]
 fn https_get(path: &str) -> Result<Vec<u8>> {
     unsafe {
         let request = check(WinHttpOpenRequest(
@@ -321,6 +335,12 @@ fn https_get(path: &str) -> Result<Vec<u8>> {
         }
         Ok(body)
     }
+}
+
+/// No HTTPS transport off Windows yet (docs/linux.md).
+#[cfg(not(windows))]
+fn https_get(_path: &str) -> std::result::Result<Vec<u8>, String> {
+    Err("no HTTPS transport on this platform yet".into())
 }
 
 /// Background: median color of a thin ring just outside `rect`.

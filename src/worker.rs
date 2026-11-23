@@ -2,6 +2,8 @@
 //! captures it from the screen (GDI) and runs Windows OCR on it.
 //! Results are posted back to the UI thread as window messages.
 
+#![cfg(windows)]
+
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::hash::Hasher;
@@ -22,6 +24,8 @@ use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 
+pub use crate::common::log;
+pub use crate::textmodel::Word;
 use crate::video::Media;
 use crate::viet;
 
@@ -57,14 +61,6 @@ const CACHE_LIMIT: usize = 64;
 /// it holds 110-175 MB; loading takes about 160 ms and only delays the
 /// Vietnamese reading of the next image (its Windows OCR words show first).
 const UNLOAD_AFTER: Duration = Duration::from_secs(60);
-
-#[derive(Clone)]
-pub struct Word {
-    /// Relative to the top-left of `OcrData::rect`.
-    pub rect: RECT,
-    pub text: String,
-    pub line: usize,
-}
 
 pub struct OcrData {
     /// Screen rect (physical pixels) the overlay must cover.
@@ -1458,15 +1454,6 @@ fn hash_pixels(px: &[u8], w: i32, h: i32) -> u64 {
     hasher.write_i32(h);
     hasher.write(px);
     hasher.finish()
-}
-
-/// Logs to stderr in debug builds, or in release builds when QC_LOG is set
-/// (stderr must then be redirected, as release builds have no console).
-pub fn log(msg: String) {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *ENABLED.get_or_init(|| cfg!(debug_assertions) || std::env::var_os("QC_LOG").is_some()) {
-        eprintln!("[quickcopy] {msg}");
-    }
 }
 
 #[cfg(test)]
