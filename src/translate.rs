@@ -26,13 +26,10 @@ const MAX_CHARS: usize = 1500;
 
 pub type Rgb = [u8; 3];
 
-/// One paragraph (or the selected part of it) to translate, and the boxes
-/// (overlay coordinates) its selected text occupies, one per line.
-pub struct Unit {
+/// One selected line: its highlight box (overlay coordinates) and text.
+pub struct Line {
+    pub rect: RECT,
     pub text: String,
-    pub slices: Vec<RECT>,
-    /// The original text of each slice, used to match its look.
-    pub slice_texts: Vec<String>,
 }
 
 pub struct Slice {
@@ -44,6 +41,7 @@ pub struct Slice {
     pub original: String,
 }
 
+/// Consecutive lines translated together, and the translation.
 pub struct UnitResult {
     pub translation: String,
     pub slices: Vec<Slice>,
@@ -55,12 +53,12 @@ pub struct Translated {
     pub result: std::result::Result<Vec<UnitResult>, String>,
 }
 
-/// Translates `units` on a background thread and posts `WM_APP_TRANSLATED`
-/// to `hwnd`. `clip` is the image's screen rect, used to sample colors.
-pub fn spawn(hwnd: HWND, id: u64, clip: RECT, target: &'static str, units: Vec<Unit>) {
+/// Translates the selected `lines` (reading order) on a background thread and
+/// posts `WM_APP_TRANSLATED` to `hwnd`. `clip` is the image's screen rect.
+pub fn spawn(hwnd: HWND, id: u64, clip: RECT, target: &'static str, lines: Vec<Line>) {
     let hwnd = hwnd.0 as isize;
     std::thread::spawn(move || {
-        let result = run(clip, target, units);
+        let result = run(clip, target, lines);
         let ptr = Box::into_raw(Box::new(Translated { id, result }));
         unsafe {
             if PostMessageW(Some(HWND(hwnd as *mut c_void)), WM_APP_TRANSLATED, WPARAM(0), LPARAM(ptr as isize)).is_err() {
@@ -70,28 +68,70 @@ pub fn spawn(hwnd: HWND, id: u64, clip: RECT, target: &'static str, units: Vec<U
     });
 }
 
-fn run(clip: RECT, target: &str, units: Vec<Unit>) -> std::result::Result<Vec<UnitResult>, String> {
+fn run(clip: RECT, target: &str, lines: Vec<Line>) -> std::result::Result<Vec<UnitResult>, String> {
     let (w, h) = (clip.right - clip.left, clip.bottom - clip.top);
     let pixels = crate::worker::capture(clip, w, h).map_err(|e| e.to_string())?;
+    let mut slices: Vec<Slice> = lines
+        .into_iter()
+        .map(|Line { rect, text }| {
+            let (background, foreground) = sample_colors(&pixels, w, h, rect);
+            // OCR boxes can clip ascenders and descenders; give the
+            // measurement the whole line height.
+            let pad = (rect.bottom - rect.top) / 4;
+            let ink = crate::style::measure(&pixels, w, h, inflate(rect, 0, pad), background, foreground);
+            Slice { rect, background, foreground, ink, original: text }
+        })
+        .collect();
+    let groups = group(&slices);
+    log(format!("{} line(s) in {} unit(s)", slices.len(), groups.len()));
     let mut out = Vec::new();
-    for unit in units {
-        let translation = translate(&unit.text, target)?;
-        let slices = unit
-            .slices
-            .iter()
-            .zip(unit.slice_texts)
-            .map(|(&rect, original)| {
-                let (background, foreground) = sample_colors(&pixels, w, h, rect);
-                // OCR boxes can clip ascenders and descenders; give the
-                // measurement the whole line height.
-                let pad = (rect.bottom - rect.top) / 4;
-                let ink = crate::style::measure(&pixels, w, h, inflate(rect, 0, pad), background, foreground);
-                Slice { rect, background, foreground, ink, original }
-            })
-            .collect();
-        out.push(UnitResult { translation, slices });
+    for range in groups.into_iter().rev() {
+        let unit: Vec<Slice> = slices.drain(range).collect();
+        let text = unit.iter().map(|s| s.original.trim()).collect::<Vec<_>>().join(" ");
+        out.push(UnitResult { translation: translate(&text, target)?, slices: unit });
     }
+    out.reverse();
     Ok(out)
+}
+
+/// Splits lines (reading order) into units translated on their own: a
+/// heading, a paragraph, a list item. A new unit starts where a sentence
+/// ends at a line's end, where the look changes (text color, size, weight:
+/// a bold white title over gray body text), or at a gap clearly wider than
+/// the usual line spacing. Without this, a whole selection read as one
+/// sentence and its translation flowed across headings and paragraphs.
+pub fn group(lines: &[Slice]) -> Vec<std::ops::Range<usize>> {
+    let gaps: Vec<i32> = lines.windows(2).map(|p| p[1].rect.top - p[0].rect.bottom).collect();
+    let mut sorted: Vec<i32> = gaps.iter().copied().filter(|&g| g >= 0).collect();
+    sorted.sort_unstable();
+    let usual = sorted.get(sorted.len() / 2).copied().unwrap_or(0) as f32;
+
+    let mut out = Vec::new();
+    let mut start = 0;
+    for i in 1..lines.len() {
+        let (prev, next) = (&lines[i - 1], &lines[i]);
+        let h = (prev.rect.bottom - prev.rect.top).min(next.rect.bottom - next.rect.top).max(1) as f32;
+        let gap = gaps[i - 1] as f32;
+        let sentence_end = prev.original.trim_end().ends_with(['.', '!', '?', ':', ';', '…', '>']);
+        let wide_gap = gap > 2.2 * h || (gap > 0.5 * h && gap > 1.5 * usual + 1.0);
+        let color_change = distance(prev.foreground, next.foreground) > 90;
+        let style_change = match (prev.ink, next.ink) {
+            (Some(a), Some(b)) => {
+                let size = a.body.max(b.body) / a.body.min(b.body).max(0.1);
+                let weight = (a.stroke / a.body.max(0.1) - b.stroke / b.body.max(0.1)).abs();
+                size > 1.2 || weight > 0.05
+            }
+            _ => false,
+        };
+        if sentence_end || wide_gap || color_change || style_change {
+            out.push(start..i);
+            start = i;
+        }
+    }
+    if start < lines.len() {
+        out.push(start..lines.len());
+    }
+    out
 }
 
 static CACHE: Mutex<Option<HashMap<(String, String), String>>> = Mutex::new(None);
@@ -291,6 +331,44 @@ pub fn inflate(r: RECT, dx: i32, dy: i32) -> RECT {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn line(top: i32, text: &str, fg: Rgb, body: f32, stroke: f32) -> Slice {
+        Slice {
+            rect: RECT { left: 0, top, right: 300, bottom: top + 14 },
+            background: [30, 35, 45],
+            foreground: fg,
+            ink: Some(crate::style::Ink { body, baseline: top as f32 + 11.0, stroke }),
+            original: text.into(),
+        }
+    }
+
+    #[test]
+    fn groups_headings_paragraphs_and_sentences() {
+        // A Telegram-like screen: white bold heading, gray body lines 7 px
+        // apart, then the next section 27 px below.
+        let white = [255, 255, 255];
+        let gray = [150, 150, 155];
+        let lines = [
+            line(0, "Phí SMS cao", white, 7.0, 2.2),
+            line(14, "Vì tình hình tài khoản giả mạo và phí SMS", gray, 7.0, 1.1),
+            line(35, "cao ở quốc gia của bạn, bạn sẽ cần trả phí", gray, 7.0, 1.1),
+            line(56, "đăng ký.", gray, 7.0, 1.1),
+            line(97, "Yêu cầu xác thực", white, 7.0, 2.2),
+            line(118, "Telegram cần gửi cho bạn SMS chứa mã", gray, 7.0, 1.1),
+        ];
+        assert_eq!(group(&lines), vec![0..1, 1..4, 4..5, 5..6]);
+    }
+
+    #[test]
+    fn keeps_a_sentence_across_evenly_spaced_lines() {
+        let black = [0, 0, 0];
+        let lines = [
+            line(0, "Do nhu cầu sắp xếp lại công việc cuối năm, ban giám đốc quyết định", black, 10.0, 1.6),
+            line(30, "điều chỉnh thời gian làm việc từ ngày 15 đến ngày 31 như sau:", black, 10.0, 1.6),
+            line(60, "1. Buổi sáng bắt đầu lúc 7 giờ 30 phút.", black, 10.0, 1.6),
+        ];
+        assert_eq!(group(&lines), vec![0..2, 2..3]);
+    }
 
     #[test]
     fn encodes_utf8_query_values() {

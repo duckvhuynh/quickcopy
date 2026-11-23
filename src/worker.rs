@@ -89,7 +89,8 @@ struct Current {
     /// The UIA image element and its rect, when the image was found through UIA.
     element: Option<(IUIAutomationElement, RECT)>,
     clip: RECT,
-    hash: u64,
+    /// Coarse look of the image when it was read (see `grid`).
+    grid: Vec<[u8; 3]>,
 }
 
 pub struct Detector {
@@ -207,7 +208,7 @@ impl Detector {
             hash = settled;
         }
         let key = hash ^ mode;
-        let current = Current { element: tracked, clip, hash };
+        let current = Current { element: tracked, clip, grid: grid(&capture(clip, w, h)?, w, h) };
 
         if let Some(words) = self.cache.get(&key) {
             log(format!("cache hit {w}x{h} in {:?}", t0.elapsed()));
@@ -358,12 +359,17 @@ impl Detector {
                 return false;
             }
         }
-        // Pixel-detected images have no element: scrolling shows up as changed pixels.
+        // Pixel-detected images have no element: scrolling shows up as changed
+        // pixels. Only a broad change counts: pages and browsers draw hover
+        // buttons on images (Edge's visual search), which must not hide us.
         let w = cur.clip.right - cur.clip.left;
         let h = cur.clip.bottom - cur.clip.top;
-        let same = matches!(capture(cur.clip, w, h), Ok(px) if hash_pixels(&px, w, h) == cur.hash);
+        let Ok(px) = capture(cur.clip, w, h) else { return false };
+        let now = grid(&px, w, h);
+        let changed = now.iter().zip(&cur.grid).filter(|(a, b)| (0..3).map(|i| (a[i] as i32 - b[i] as i32).abs()).sum::<i32>() > 24).count();
+        let same = changed * 100 <= cur.grid.len() * 15;
         if !same {
-            log("revalidate: pixels changed".into());
+            log(format!("revalidate: image changed ({changed}/{} blocks)", cur.grid.len()));
         }
         same
     }
@@ -848,6 +854,32 @@ fn to_words(lines: &[Vec<(Box4, String)>], scale: f32) -> Vec<Word> {
         }
     }
     words
+}
+
+/// Mean color of each cell of a 16x16 grid over a BGRA capture.
+fn grid(px: &[u8], w: i32, h: i32) -> Vec<[u8; 3]> {
+    const N: i32 = 16;
+    let mut out = Vec::with_capacity((N * N) as usize);
+    for gy in 0..N {
+        for gx in 0..N {
+            let (x0, x1) = (gx * w / N, ((gx + 1) * w / N).max(gx * w / N + 1).min(w));
+            let (y0, y1) = (gy * h / N, ((gy + 1) * h / N).max(gy * h / N + 1).min(h));
+            let mut sum = [0u64; 3];
+            let mut n = 0u64;
+            for y in (y0..y1).step_by(2) {
+                for x in (x0..x1).step_by(2) {
+                    let i = ((y * w + x) * 4) as usize;
+                    sum[0] += px[i + 2] as u64;
+                    sum[1] += px[i + 1] as u64;
+                    sum[2] += px[i] as u64;
+                    n += 1;
+                }
+            }
+            let n = n.max(1);
+            out.push([(sum[0] / n) as u8, (sum[1] / n) as u8, (sum[2] / n) as u8]);
+        }
+    }
+    out
 }
 
 fn hash_pixels(px: &[u8], w: i32, h: i32) -> u64 {

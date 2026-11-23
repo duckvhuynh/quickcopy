@@ -39,7 +39,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 
 use textmodel::TextModel;
-use translate::{Translated, Unit, WM_APP_TRANSLATED};
+use translate::{Translated, WM_APP_TRANSLATED};
 use worker::{OcrData, Request, WM_APP_HIDE, WM_APP_SHOW, WM_APP_UPDATE, Word, log};
 
 const WM_APP_TRAY: u32 = WM_APP + 10;
@@ -891,54 +891,27 @@ unsafe fn selection_menu(overlay: HWND) {
     }
 }
 
-/// Sends the selection off for translation, one request per paragraph so
-/// sentences that wrap across lines are translated whole.
+/// Sends the selected lines off for translation. The translation thread
+/// measures each line's look and groups them into headings and paragraphs
+/// (`translate::group`), so each is translated and laid out on its own.
 fn start_translation(app: &mut App) {
     if !app.has_selection() || app.translating || app.translation.is_some() {
         return;
     }
     let (Some(data), Some(model)) = (&app.data, &app.model) else { return };
-    let (lo, hi) = (app.anchor.min(app.focus), app.anchor.max(app.focus));
-    let mut units = Vec::new();
-    for p in textmodel::paragraphs(&model.line_rects) {
-        let (Some(&first), Some(&last)) = (p.lines.iter().min(), p.lines.iter().max()) else { continue };
-        let (a, b) = (lo.max(model.lines[first].0), hi.min(model.lines[last].1));
-        if a >= b {
-            continue;
-        }
-        let text = model.text(a, b).replace('\n', " ");
-        if text.trim().is_empty() {
-            continue;
-        }
-        let (slices, slice_texts) = model.selected_lines(a, b).into_iter().unzip();
-        units.push(Unit { text: text.trim().to_string(), slices, slice_texts });
-    }
-    if units.is_empty() {
+    let lines: Vec<translate::Line> = model
+        .selected_lines(app.anchor, app.focus)
+        .into_iter()
+        .filter(|(_, text)| !text.trim().is_empty())
+        .map(|(rect, text)| translate::Line { rect, text })
+        .collect();
+    if lines.is_empty() {
         return;
     }
-    units.sort_by_key(|u| u.slices.first().map_or(0, |r| r.top));
-    // Widely spaced lines can land in separate paragraphs; a sentence that
-    // runs on (no closing punctuation) into the text right below is one unit.
-    let mut merged: Vec<Unit> = Vec::new();
-    for unit in units {
-        if let (Some(prev), Some(first)) = (merged.last_mut(), unit.slices.first()) {
-            let last = prev.slices.last().copied().unwrap_or_default();
-            let h = last.bottom - last.top;
-            let ends = prev.text.trim_end().ends_with(['.', '!', '?', ':', ';', '…']);
-            if !ends && first.top - last.bottom <= 2 * h {
-                prev.text = format!("{} {}", prev.text, unit.text);
-                prev.slices.extend(unit.slices);
-                prev.slice_texts.extend(unit.slice_texts);
-                continue;
-            }
-        }
-        merged.push(unit);
-    }
-    let units = merged;
-    log(format!("translating {} paragraph(s)", units.len()));
+    log(format!("translating {} line(s)", lines.len()));
     app.translating = true;
     render(app);
-    translate::spawn(app.main, data.id, data.rect, TARGET_LANGUAGE, units);
+    translate::spawn(app.main, data.id, data.rect, TARGET_LANGUAGE, lines);
 }
 
 /// A translation came back: draw it in the original's size and weight, on
@@ -995,7 +968,9 @@ fn apply_translation(app: &mut App, translated: Translated) {
         for (slice, line) in unit.slices.iter().zip(fit.lines) {
             let h = slice.rect.bottom - slice.rect.top;
             // Cover the original glyphs, tone marks included.
-            let mut fill = translate::inflate(slice.rect, 2, (h / 5).max(2));
+            let mut fill = translate::inflate(slice.rect, 2, 0);
+            fill.top -= (h * 2 / 5).max(2);
+            fill.bottom += (h / 3).max(2);
             let needed = paint::measure(&line, fit.size, weight).ceil() as i32 + 6;
             fill.right = fill.right.max(fill.left + needed);
             let baseline = slice.ink.map(|i| i.baseline).or(offset.map(|o| slice.rect.top as f32 + o));

@@ -207,10 +207,16 @@ pub fn draw(dc: HDC, w: i32, h: i32, boxes: &[DrawBox]) -> Result<()> {
         target.BeginDraw();
         // ClearType needs an opaque target; grayscale works with alpha.
         target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+        let rect = |b: &DrawBox| D2D_RECT_F { left: b.fill.left as f32, top: b.fill.top as f32, right: b.fill.right as f32, bottom: b.fill.bottom as f32 };
+        // Hide all the original text first, then draw every line on top
+        // without a background: filling box by box let one line's fill cut
+        // the tone marks and descenders off the line drawn before it.
         for b in boxes {
-            let r = D2D_RECT_F { left: b.fill.left as f32, top: b.fill.top as f32, right: b.fill.right as f32, bottom: b.fill.bottom as f32 };
             let background = target.CreateSolidColorBrush(&color(b.background), None)?;
-            target.FillRectangle(&r, &background);
+            target.FillRectangle(&rect(b), &background);
+        }
+        for b in boxes {
+            let r = rect(b);
             if b.text.is_empty() {
                 continue;
             }
