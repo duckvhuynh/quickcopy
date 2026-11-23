@@ -37,15 +37,27 @@ pub struct Recognizer {
     vocab: Vec<char>,
 }
 
-impl Recognizer {
-    pub fn load(path: &Path) -> Result<Self, String> {
-        let err = |e: &dyn std::fmt::Display| format!("loading {}: {e}", path.display());
+/// ONNX Runtime allows one environment per process, so it is made once and
+/// kept: the worker drops the model when idle and loads it again later, and
+/// a second environment failed that load, which turned Vietnamese reading
+/// off until the app restarted.
+fn environment() -> Result<ort::environment::Environment, String> {
+    static ENV: std::sync::OnceLock<Result<ort::environment::Environment, String>> = std::sync::OnceLock::new();
+    ENV.get_or_init(|| {
         let runtime = runtime_path().ok_or("onnxruntime.dll not found next to the exe or in System32")?;
-        let env = ort::init_from(&runtime)
+        ort::init_from(&runtime)
             .map_err(|e| format!("loading {}: {e}", runtime.display()))?
             .with_telemetry(false)
             .build()
-            .map_err(|e| err(&e))?;
+            .map_err(|e| format!("starting ONNX Runtime: {e}"))
+    })
+    .clone()
+}
+
+impl Recognizer {
+    pub fn load(path: &Path) -> Result<Self, String> {
+        let err = |e: &dyn std::fmt::Display| format!("loading {}: {e}", path.display());
+        let env = environment()?;
         // ONNX Runtime already defaults to full graph optimization; setting the
         // level explicitly is rejected by the 1.17 runtime Windows ships.
         // Its memory arena stays on: without it the session holds 65 MB
@@ -257,5 +269,23 @@ mod tests {
             logits[t * v + c] = 1.0;
         }
         assert_eq!(ctc_greedy(&logits, seq.len(), v), vec![(5, 0, 1), (5, 3, 3), (7, 4, 5)]);
+    }
+}
+
+#[cfg(test)]
+mod reload_tests {
+    /// The worker drops the model when idle and loads it again; a second
+    /// load once failed and turned Vietnamese reading off. Runs where the
+    /// model file is present (it is not in git).
+    #[test]
+    fn loads_again_after_being_dropped() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("models/viesvtr/viesvtr_v7.onnx");
+        if !path.exists() {
+            return;
+        }
+        for i in 0..3 {
+            let r = super::Recognizer::load(&path);
+            assert!(r.is_ok(), "load {i}: {:?}", r.err());
+        }
     }
 }

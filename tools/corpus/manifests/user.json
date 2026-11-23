@@ -50,5 +50,20 @@
       "31 /audio-polish",
       "32 /cut-check"
     ]
+  },
+  {
+    "id": "tweet-vi",
+    "file": "web/user/tweet-vi.png",
+    "source": "screenshot shared by the user (X post, translated to Vietnamese)",
+    "category": "social-post-vi",
+    "lang": "vi",
+    "expect": [
+      "Được dịch từ Tiếng Trung",
+      "Hiện bản gốc",
+      "Vai trò của mười hai con giáp",
+      "là để đảm bảo rằng mọi người đều là súc",
+      "sinh",
+      "22 giờ"
+    ]
   }
 ]
