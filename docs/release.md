@@ -157,4 +157,6 @@ the install folder on `PATH` instead of linking the exe. QuickCopy looks for
 `packaging/scoop/quickcopy.json` is a manifest for a Scoop bucket. Its
 `checkver` follows GitHub releases and `autoupdate` reads the hash from
 `SHA256SUMS.txt`. Its `version` and `hash` are those of the latest release;
-in the bucket, Scoop's `checkver.ps1 quickcopy -u` updates them.
+The bucket is [duckvhuynh/scoop-bucket](https://github.com/duckvhuynh/scoop-bucket).
+Its Excavator workflow runs every 4 hours and updates its copy of the
+manifest to a new release by itself; nothing needs doing there on release.

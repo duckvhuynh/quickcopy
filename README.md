@@ -46,6 +46,13 @@ English and Vietnamese, and all text recognition runs on your PC. It is a
    in the notification area. Closing the settings leaves QuickCopy running
    there.
 
+With [Scoop](https://scoop.sh):
+
+```powershell
+scoop bucket add duckvhuynh https://github.com/duckvhuynh/scoop-bucket
+scoop install duckvhuynh/quickcopy
+```
+
 To start QuickCopy when you sign in, turn on **Start with Windows** in its
 settings. It then starts in the tray, without the settings window.
 
