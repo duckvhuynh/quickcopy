@@ -292,7 +292,10 @@ fn evaluate(img: &Img, cx: usize, cy: usize, (left, ly): Side, (right, ry): Side
         return None;
     }
     let (iw, ih) = (right - left, bottom - top);
-    if ih < MIN_SIDE || iw * 100 > w * 95 || ih * 100 > h * 95 {
+    // Nearly the whole area is the window itself, not a picture in it. A
+    // picture as tall as the window but narrower is one (a TikTok photo, a
+    // story); its sides still have to sit on one background (below).
+    if ih < MIN_SIDE || (iw * 100 > w * 95 && ih * 100 > h * 95) {
         debug("rejected: size");
         return None;
     }

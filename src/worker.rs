@@ -950,9 +950,10 @@ impl Detector {
         let changed = now.iter().zip(&cur.grid).filter(|(a, b)| differ(a, b)).count();
         // Gmail darkens a picture under the cursor and puts buttons on it:
         // every cell changes, but the light and dark parts stay where they
-        // were. Only for an element that has not moved: a picture found
-        // from pixels may have scrolled a little, which also keeps them.
-        let same = changed * 100 <= cur.grid.len() * 15 || (cur.element.is_some() && correlation(&now, &cur.grid) >= 0.9);
+        // were. TikTok does the same to a photo found from pixels, which
+        // gets a stricter level, as a small scroll also keeps them in place.
+        let alike = correlation(&now, &cur.grid);
+        let same = changed * 100 <= cur.grid.len() * 15 || alike >= if cur.element.is_some() { 0.9 } else { 0.97 };
         if !same {
             log(format!("revalidate: image changed ({changed}/{} blocks)", cur.grid.len()));
             if cur.element.is_some() && cur.media.is_none() && !cur.may_play {
