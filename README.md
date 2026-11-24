@@ -4,37 +4,46 @@
 [![Release](https://img.shields.io/github/v/release/duckvhuynh/quickcopy)](https://github.com/duckvhuynh/quickcopy/releases/latest)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
-Select, copy and translate the text inside any image on your Windows screen.
+**Live Text for Windows. Rest your cursor on any image and its text becomes selectable.**
 
-QuickCopy works like Live Text or Google Lens, on Windows. Rest the cursor on an image, a
-screenshot or a paused video, and the text in it becomes selectable like
-normal text. Copy it with Ctrl+C or translate it in place. QuickCopy reads
-English and Vietnamese, and all text recognition runs on your PC. It is a
-1 MB Rust program with a tray icon, no UI framework and no GPU use.
+A screenshot someone sent you in chat, a photo of a receipt, a slide in a
+paused YouTube video: hover over it for a moment, drag across the words and
+press Ctrl+C. Snipping Tool and PowerToys Text Extractor make you press a
+shortcut and cut out a region first. QuickCopy reads the image as soon as
+the cursor rests on it, and the image never leaves your PC.
+
+Press Ctrl+T and the selection is translated on top of the image, in the
+original's colors and size, so a screenshot of an English article reads
+as if it were written in Vietnamese (or any other language Google
+Translate has). QuickCopy reads English and Vietnamese, with every tone
+mark.
+
+It stays out of the way: a 1 MB program in the tray that uses about 3 MB
+of memory while idle and never touches the GPU.
 
 <!-- TODO: add a short GIF of selecting and translating text in an image,
      saved as docs/images/demo.gif, and show it here:
      ![Selecting and translating text in an image](docs/images/demo.gif) -->
 
-## Features
+## What it does
 
-- Reads text in images on web pages, in apps and in Electron apps that
-  expose no accessibility tree. Tested in Edge, Brave, Firefox, Facebook's
-  photo viewer, Zalo, Photos, Media Player and VLC.
-- Reads the frame of a paused video in a browser, in Media Player and in
-  VLC. A playing video is left alone.
-- Selects text like a text editor does: drag, double-click a word,
-  triple-click a line, Shift+click, Shift+arrows, Ctrl+A.
-- Keeps columns, tables and panes apart, so a drag down one column selects
-  only that column.
-- Translates the selection with Google Translate and paints the
-  translation over the original, in matching colors, like Google Lens.
-- Reads Vietnamese with tone marks through the optional VieSVTR model.
-- Follows the Windows light or dark mode and accent color. The app is in
-  English or Vietnamese.
-- Uses about 3 MB of private memory when idle.
-- Checks GitHub Releases for a new version once a day and installs it from
-  the tray menu.
+- Works on images in browsers and desktop apps, including apps like Zalo
+  that hide their images from accessibility tools. Tested in Edge, Brave,
+  Firefox, Facebook's photo viewer, Zalo, Photos, Media Player and VLC.
+- Reads the frame of a paused video in the browser, Media Player and VLC,
+  and leaves a playing video alone.
+- Selects like a text editor: drag, double-click a word, triple-click a
+  line, Shift+click, Shift+arrows, Ctrl+A.
+- Keeps columns, tables and panes apart, so dragging down one column
+  doesn't pick up the one beside it.
+- Translates with Google Translate and paints the result over the original
+  in matching colors, as Google Lens does.
+- Reads Vietnamese with full tone marks, using the VieSVTR model it
+  downloads the first time it runs.
+- Matches Windows light or dark mode and your accent color. The app itself
+  is in English or Vietnamese.
+- Updates itself from GitHub Releases and checks each download's SHA-256
+  hash before installing it.
 
 ## Install
 
