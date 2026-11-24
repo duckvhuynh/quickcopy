@@ -12,22 +12,24 @@ press Ctrl+C. Snipping Tool and PowerToys Text Extractor make you press a
 shortcut and cut out a region first. QuickCopy reads the image as soon as
 the cursor rests on it, and the image never leaves your PC.
 
+![Copying text from a picture: four steps with a screenshot tool, one with QuickCopy](docs/images/compare.gif)
+
 Press Ctrl+T and the selection is translated on top of the image, in the
 original's colors and size, so a screenshot of an English article reads
 as if it were written in Vietnamese (or any other language Google
 Translate has). QuickCopy reads English and Vietnamese, with every tone
 mark.
 
+![Ctrl+T translates an English score card into Vietnamese on top of the picture](docs/images/translate.gif)
+
 It stays out of the way: a 1 MB program in the tray that uses about 4 MB
 of memory when it starts and never touches the GPU. Reading Vietnamese
 loads a model that takes about 65 MB while it works; a minute after the
 last read it lets go of it, and QuickCopy sits at about 13 MB.
 
-<!-- TODO: add a short GIF of selecting and translating text in an image,
-     saved as docs/images/demo.gif, and show it here:
-     ![Selecting and translating text in an image](docs/images/demo.gif) -->
-
 ## What it does
+
+![Selecting text in a paused video on X, a TikTok photo, and a letter in Zalo and Teams](docs/images/apps.gif)
 
 - Works on images in browsers and desktop apps, including apps like Zalo
   that hide their images from accessibility tools. Tested in Edge, Brave,
