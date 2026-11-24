@@ -7,6 +7,13 @@ and QuickCopy uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Starting `quickcopy.exe` opens the settings window, so it is clear that
+  QuickCopy runs. The start at sign-in (**Start with Windows**) passes
+  `--tray` and stays in the tray; an existing Start with Windows entry is
+  updated to it.
+
 ## [0.1.0] - 2026-11-24
 
 The first public release.

@@ -34,7 +34,7 @@ function Toggle { if ($PauseWith -eq "media") { [D]::Key(0xB3, 1) } else { [D]::
 Get-Process quickcopy -ErrorAction SilentlyContinue | Stop-Process -Force
 [D]::SetCursorPos(5, 5) | Out-Null
 $env:QC_LOG = "1"
-$qc = Start-Process $Exe -PassThru -RedirectStandardError $log
+$qc = Start-Process $Exe -ArgumentList '--tray' -PassThru -RedirectStandardError $log
 Start-Sleep -Milliseconds 1500
 function Lines { Get-Content $log -ErrorAction SilentlyContinue }
 $res = @()

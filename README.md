@@ -42,10 +42,12 @@ English and Vietnamese, and all text recognition runs on your PC. It is a
    [latest release](https://github.com/duckvhuynh/quickcopy/releases/latest).
 2. Unzip it into any folder. QuickCopy needs no installer and no
    administrator rights.
-3. Run `quickcopy.exe`. Its icon appears in the notification area.
+3. Run `quickcopy.exe`. Its settings window opens, and its icon appears
+   in the notification area. Closing the settings leaves QuickCopy running
+   there.
 
 To start QuickCopy when you sign in, turn on **Start with Windows** in its
-settings.
+settings. It then starts in the tray, without the settings window.
 
 ### Verify the download
 
@@ -146,8 +148,9 @@ overlay never takes the player's clicks.
 ### Settings
 
 Open the settings from the tray icon (**Settings…**), by double-clicking the
-tray icon, or with `quickcopy --settings`. Starting `quickcopy.exe` again
-also opens the settings of the copy that is running.
+tray icon, or by starting `quickcopy.exe` again, which opens the settings
+of the copy that is running. `quickcopy --tray` starts QuickCopy without
+opening the settings; **Start with Windows** uses it.
 
 - **Start with Windows**.
 - **Translate into**: any of Google Translate's languages, with search.

@@ -6,10 +6,11 @@ https://github.com/duckvhuynh/quickcopy
 
 Start
 -----
-Run quickcopy.exe. It stays in the notification area (tray). Rest the
-mouse on an image for a moment, then drag over its text to select it, and
-press Ctrl+C to copy or Ctrl+T to translate. Double-click the tray icon to
-open the settings.
+Run quickcopy.exe. Its settings window opens; close it and QuickCopy keeps
+running in the notification area (tray). Rest the mouse on an image for a
+moment, then drag over its text to select it, and press Ctrl+C to copy or
+Ctrl+T to translate. Double-click the tray icon, or run quickcopy.exe
+again, to open the settings.
 
 Keep this folder somewhere you can write to, for example under
 %LOCALAPPDATA%, not in Program Files: updates replace quickcopy.exe here.
@@ -60,9 +61,10 @@ folder, %APPDATA%\QuickCopy and %LOCALAPPDATA%\QuickCopy.
 QuickCopy sao chép và dịch chữ trong ảnh hoặc video đang tạm dừng trên màn
 hình.
 
-Chạy quickcopy.exe, ứng dụng nằm ở khay hệ thống. Để chuột yên trên ảnh một
-chút, kéo chọn chữ, nhấn Ctrl+C để sao chép hoặc Ctrl+T để dịch. Nhấn đúp
-biểu tượng ở khay để mở cài đặt. Hãy để thư mục này ở nơi ghi được (ví dụ
+Chạy quickcopy.exe, cửa sổ cài đặt sẽ mở ra; đóng cửa sổ thì ứng dụng vẫn
+chạy ở khay hệ thống. Để chuột yên trên ảnh một chút, kéo chọn chữ, nhấn
+Ctrl+C để sao chép hoặc Ctrl+T để dịch. Nhấn đúp biểu tượng ở khay, hoặc
+chạy lại quickcopy.exe, để mở cài đặt. Hãy để thư mục này ở nơi ghi được (ví dụ
 trong %LOCALAPPDATA%), không để trong Program Files, vì bản cập nhật thay
 quickcopy.exe tại đây.
 

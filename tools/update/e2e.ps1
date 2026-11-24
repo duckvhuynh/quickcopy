@@ -58,7 +58,7 @@ try {
   Write-Output "--- quickcopy --check-update (before)"
   & $exe --check-update | Write-Output
   $oldHash = Hash $exe
-  $qc = Start-Process $exe -PassThru -RedirectStandardError $log
+  $qc = Start-Process $exe -ArgumentList '--tray' -PassThru -RedirectStandardError $log
   Write-Output "--- started $exe (pid $($qc.Id)); waiting for its first check"
   if (-not (Wait-For { (Test-Path $log) -and (Select-String -Quiet -Path $log -Pattern 'update: latest') } 30)) { throw 'no update check within 30 s' }
   $main = [U]::MainOf([uint32]$qc.Id)

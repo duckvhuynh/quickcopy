@@ -36,7 +36,7 @@ quickcopy --probe X Y                     # detect and OCR the image at a screen
 quickcopy --layout image.png              # lines in reading order, with their blocks
 quickcopy --uia X Y                       # what UI Automation and IAccessible2 report at a point
 quickcopy --drag image.png X0 Y0 X1 Y1    # what a drag between two points selects
-quickcopy --settings                      # open the settings window
+quickcopy --tray                          # run in the tray without opening the settings
 quickcopy --check-update                  # latest release, whether it is newer, its asset URLs
 quickcopy --download-model                # download the VieSVTR model, as Download in the settings does
 ```

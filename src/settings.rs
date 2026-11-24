@@ -151,19 +151,43 @@ const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 #[cfg(windows)]
 const RUN_VALUE: PCWSTR = w!("QuickCopy");
 
+/// Passed by the Run value: a start at sign-in goes to the tray without
+/// opening the settings, which every other start does.
+#[cfg(windows)]
+pub const TRAY_FLAG: &str = "--tray";
+
+/// The exe a Run value starts: the quoted path at its start, or all of it.
+#[cfg(any(windows, test))]
+fn run_exe(value: &str) -> &str {
+    match value.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or(rest),
+        None => value.trim(),
+    }
+}
+
 /// Whether Windows starts this exe at sign-in (the Run value points here).
 #[cfg(windows)]
 pub fn start_with_windows() -> bool {
+    run_value().is_some_and(|value| std::env::current_exe().is_ok_and(|exe| run_exe(&value).eq_ignore_ascii_case(&exe.to_string_lossy())))
+}
+
+/// The Run value of 0.1.0 had no `--tray`, so every sign-in opened the
+/// settings; this adds it.
+#[cfg(windows)]
+pub fn update_run_value() {
+    if start_with_windows() && !run_value().is_some_and(|v| v.ends_with(TRAY_FLAG)) {
+        let _ = set_start_with_windows(true);
+    }
+}
+
+#[cfg(windows)]
+fn run_value() -> Option<String> {
     let mut buf = [0u16; 1024];
     let mut size = (buf.len() * 2) as u32;
     let ok = unsafe {
         RegGetValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_VALUE, RRF_RT_REG_SZ, None, Some(buf.as_mut_ptr().cast()), Some(&mut size))
     };
-    if ok.is_err() {
-        return false;
-    }
-    let value = String::from_utf16_lossy(&buf[..(size as usize / 2).saturating_sub(1)]);
-    std::env::current_exe().is_ok_and(|exe| value.trim_matches('"').eq_ignore_ascii_case(&exe.to_string_lossy()))
+    ok.is_ok().then(|| String::from_utf16_lossy(&buf[..(size as usize / 2).saturating_sub(1)]))
 }
 
 #[cfg(windows)]
@@ -173,7 +197,7 @@ pub fn set_start_with_windows(on: bool) -> Result<()> {
         RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, None, KEY_SET_VALUE, &mut key).ok()?;
         let result = if on {
             let exe = std::env::current_exe().map_err(|e| Error::new(windows::Win32::Foundation::E_FAIL, e.to_string()))?;
-            let value: Vec<u16> = format!("\"{}\"", exe.display()).encode_utf16().chain(std::iter::once(0)).collect();
+            let value: Vec<u16> = format!("\"{}\" {TRAY_FLAG}", exe.display()).encode_utf16().chain(std::iter::once(0)).collect();
             let bytes = std::slice::from_raw_parts(value.as_ptr().cast::<u8>(), value.len() * 2);
             RegSetValueExW(key, RUN_VALUE, None, REG_SZ, Some(bytes)).ok()
         } else {
@@ -190,6 +214,13 @@ pub fn set_start_with_windows(on: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_values_name_their_exe() {
+        assert_eq!(run_exe(r#""C:\Apps\QuickCopy\quickcopy.exe" --tray"#), r"C:\Apps\QuickCopy\quickcopy.exe");
+        assert_eq!(run_exe(r#""C:\Apps\Quick Copy\quickcopy.exe""#), r"C:\Apps\Quick Copy\quickcopy.exe");
+        assert_eq!(run_exe(r"C:\quickcopy.exe"), r"C:\quickcopy.exe");
+    }
 
     #[test]
     fn shortcut_labels_and_matching() {

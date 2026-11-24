@@ -3,7 +3,9 @@
 //! Ctrl+C or the right-click menu. English and Vietnamese.
 //!
 //! Usage:
-//!   quickcopy                 run in the tray
+//!   quickcopy                 run in the tray and open the settings
+//!   quickcopy --tray          run in the tray only (the Start with Windows
+//!                             entry uses this)
 //!   quickcopy --probe X Y     OCR the image at screen point (X, Y) and print it
 //!   quickcopy --ocr-file F    OCR an image file and print text and word boxes
 //!   quickcopy --drag F X0 Y0 X1 Y1 ...
@@ -433,7 +435,10 @@ fn main() -> Result<()> {
             balloon(main, "QuickCopy", &i18n::t().updated.replace("{}", &version), NIIF_INFO);
         }
         log("running; hover an image, then select its text".into());
-        if args.iter().any(|a| a == "--settings") {
+        // Started by hand: show the settings, so it is clear QuickCopy runs.
+        // Starts at sign-in and after an update stay in the tray.
+        settings::update_run_value();
+        if !args.iter().any(|a| a == settings::TRAY_FLAG || a == "--updated") {
             settings_ui::open(main);
         }
 

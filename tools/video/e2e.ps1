@@ -37,7 +37,7 @@ for ($i = 0; $i -lt 50 -and -not $pb; $i++) { Start-Sleep -Milliseconds 150; for
 Start-Sleep -Milliseconds 1500
 $o = New-Object Z+PT; [Z]::ClientToScreen($pb.MainWindowHandle, [ref]$o) | Out-Null
 $env:QC_LOG = "1"; $env:QC_CAPTURABLE = "1"
-$qc = Start-Process $Exe -PassThru -RedirectStandardError $log
+$qc = Start-Process $Exe -ArgumentList '--tray' -PassThru -RedirectStandardError $log
 Start-Sleep -Milliseconds 1500
 $res = @("page $Query, window '$($pb.MainWindowTitle)'")
 function Lines { Get-Content $log -ErrorAction SilentlyContinue }
