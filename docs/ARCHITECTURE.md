@@ -37,6 +37,26 @@ under it. The answer decides what gets read:
   nothing of the page's own there (text, links, images, controls). That
   check leaves a box of real text alone.
 
+When no picture is found, the question is whether the cursor is on real
+text or a control the user can already use (`classify` in `src/worker.rs`):
+
+- Real text or a control is left alone: an I-beam cursor, an element with
+  a text pattern (an editor, a web page's own document), or any element
+  type other than a pane, custom element, group, document or window (a
+  button, a link, a list item, a menu).
+- Anything else is a bare area the app draws in, such as Paint's canvas, a
+  game, or an app without an accessibility tree. What it shows is read
+  from pixels like a picture. A big area is read in a 1400x900 box around
+  the cursor. The box moves in steps of half its size, so rests near each
+  other read the same pixels and hit the cache. On a web page, the area is
+  read only if the page shows nothing of its own in it, the same check as
+  for a picture found from pixels.
+
+A web page's own document is left alone: before Chromium turns on full
+accessibility, it answers with the document for every point, including
+points on text. A window that comes to the front gets its pictures read
+ahead of time, never its bare areas.
+
 A Chromium or Electron window gets up to 1 s on first contact to build its
 accessibility tree. If nothing is found under a resting cursor, QuickCopy
 asks again up to twice, 800 ms apart.
@@ -87,6 +107,14 @@ on the image still reach the app underneath. Around each paragraph, the
 overlay takes the mouse a little beyond the text, so a drag that starts
 just before a line or between lines selects text instead of dragging the
 image. Over a video this margin is smaller.
+
+Over a bare area of an app, the margin is as small as over a video, and a
+press selects only once it drags further than the system's drag distance.
+A plain click hides the overlay and is sent again with `SendInput` where it
+was pressed, so the app's own buttons and links drawn there still work.
+The area is read again once the cursor rests after a double-click's time,
+so a double-click reaches the app too. Double and triple clicks select
+words and lines only on pictures.
 
 The overlay takes keyboard focus only on a click in it, never on hover. It
 gives focus back on Esc, on a key it does not handle (which is replayed to
