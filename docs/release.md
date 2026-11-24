@@ -122,14 +122,15 @@ the exe's signature is not valid.
 ## winget
 
 `packaging/winget/` holds templates for `duckvhuynh.QuickCopy` with
-`__VERSION__` and `__ZIP_SHA256__` placeholders. For the first submission,
-fill them from the published release's hashes and validate:
+`__VERSION__` and `__ZIP_SHA256__` placeholders. The filled manifests for
+0.1.0 are in `packaging/winget/manifests/`, in the folder layout of
+winget-pkgs. They were made from the published release's hashes like this:
 
 ```powershell
 $v = 'X.Y.Z'
 gh release download "v$v" --repo duckvhuynh/quickcopy --pattern SHA256SUMS.txt --dir $env:TEMP\qc --clobber
 $sha = ((Select-String "  QuickCopy-$v-windows-x64.zip$" $env:TEMP\qc\SHA256SUMS.txt).Line -split ' ')[0].ToUpper()
-$out = "manifests\d\duckvhuynh\QuickCopy\$v"
+$out = "packaging\winget\manifests\d\duckvhuynh\QuickCopy\$v"
 New-Item -ItemType Directory -Force $out | Out-Null
 Get-ChildItem packaging\winget\*.yaml | ForEach-Object {
   (Get-Content $_ -Raw).Replace('__VERSION__', $v).Replace('__ZIP_SHA256__', $sha) |
@@ -138,7 +139,7 @@ Get-ChildItem packaging\winget\*.yaml | ForEach-Object {
 winget validate --manifest $out
 ```
 
-Open a PR adding that folder to
+Open a PR adding the `manifests\d\duckvhuynh\QuickCopy\X.Y.Z` folder to
 [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs). Later
 versions are one command with
 [wingetcreate](https://github.com/microsoft/winget-create):
@@ -155,6 +156,5 @@ the install folder on `PATH` instead of linking the exe. QuickCopy looks for
 
 `packaging/scoop/quickcopy.json` is a manifest for a Scoop bucket. Its
 `checkver` follows GitHub releases and `autoupdate` reads the hash from
-`SHA256SUMS.txt`. Before the first release is published its `hash` is a
-placeholder; in the bucket, run Scoop's `checkver.ps1 quickcopy -u` to fill
-the version and hash from the latest release.
+`SHA256SUMS.txt`. Its `version` and `hash` are those of the latest release;
+in the bucket, Scoop's `checkver.ps1 quickcopy -u` updates them.
