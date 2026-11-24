@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.28.0.schema.json
+PackageIdentifier: duckvhuynh.QuickCopy
+PackageVersion: 0.1.3
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: QuickCopy\quickcopy.exe
+    PortableCommandAlias: quickcopy
+# quickcopy.exe finds models\ next to itself; a symlink in winget's Links
+# folder would point it at the wrong folder, so put the install folder on
+# PATH instead.
+ArchiveBinariesDependOnPath: true
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/duckvhuynh/quickcopy/releases/download/v0.1.3/QuickCopy-0.1.3-windows-x64.zip
+    InstallerSha256: B95AB61BA1EF37A2FC5BF494083FFBEE9D802D2DC64A7036808E2CBEB04FE0AA
+ManifestType: installer
+ManifestVersion: 1.28.0
