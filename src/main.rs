@@ -94,6 +94,8 @@ const TICK_MS: u32 = 20;
 /// How long the cursor must rest before we look for an image under it.
 /// Repeat visits are cache hits, so this is most of the wait on them.
 const DWELL: Duration = Duration::from_millis(150);
+/// Two changes of a picture in place this close together make it an animation.
+const ANIMATION_WINDOW: Duration = Duration::from_secs(6);
 /// Extra detection attempts while the cursor rests and nothing was found.
 const DETECT_RETRIES: u8 = 2;
 const DETECT_RETRY: Duration = Duration::from_millis(800);
@@ -153,6 +155,10 @@ struct App {
     /// The picture changed in place under the overlay (an animation): the
     /// overlay shows the frame that was read, so what is selected is what is seen.
     frozen: bool,
+    /// Where and when the picture under the overlay last changed in place
+    /// (see `WM_APP_CHANGED`). Kept when the overlay goes, as a GIF's next
+    /// frame is read by a new overlay.
+    changed_at: Option<(RECT, Instant)>,
     /// The window that had focus before the overlay took it.
     prev_foreground: HWND,
     /// The user asked to copy before the Vietnamese reading arrived.
@@ -409,6 +415,7 @@ fn main() -> Result<()> {
                 menu_open: false,
                 stale: false,
                 frozen: false,
+                changed_at: None,
                 prev_foreground: HWND::default(),
                 pending_copy: false,
                 flashing: false,
@@ -493,15 +500,24 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             LRESULT(0)
         }
         WM_APP_CHANGED => {
-            // An animated picture (a GIF in an email) moved on. Reading each
-            // frame would take the overlay away every few seconds, in the
-            // middle of a drag: keep the frame that was read on screen, like a
-            // paused video, until the cursor leaves it.
+            // The picture changed in place: a GIF moved on, or the page put
+            // another picture there (X going to the next post). A second
+            // change at the same place soon after the first is an animation:
+            // keep the frame that was read on screen, like a paused video, so
+            // a drag is not cut short. So does a change while text is
+            // selected or our menu is open. Otherwise read what is there now.
             with_app(|app| {
-                if app.data.is_some() && !app.frozen {
-                    log("animated picture: showing the frame that was read".into());
-                    app.frozen = true;
-                    render(app);
+                let Some(rect) = app.data.as_ref().map(|d| d.rect) else { return };
+                let animated = app.changed_at.is_some_and(|(r, at)| r == rect && at.elapsed() < ANIMATION_WINDOW);
+                app.changed_at = Some((rect, Instant::now()));
+                if animated || app.has_selection() || app.dragging || app.pressed.is_some() || app.menu_open || app.translation.is_some() {
+                    if !app.frozen {
+                        log("picture changed: showing the frame that was read while text is selected".into());
+                        app.frozen = true;
+                        render(app);
+                    }
+                } else {
+                    hide_stale(app);
                 }
             });
             LRESULT(0)
