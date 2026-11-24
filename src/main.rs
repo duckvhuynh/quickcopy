@@ -600,7 +600,7 @@ fn tick(app: &mut App) {
         }
         // A selection stays until the user clicks elsewhere (like native
         // text), so only an idle overlay goes away when the cursor leaves.
-        let busy = app.dragging || app.active || app.flashing || app.pending_copy;
+        let busy = app.dragging || app.pressed.is_some() || app.active || app.flashing || app.pending_copy;
         if !busy && !contains(data.rect, pos) {
             log("hide: cursor left the image".into());
             hide(app);
