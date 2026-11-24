@@ -1,5 +1,5 @@
 # Template: docs/release.md fills __VERSION__ and __ZIP_SHA256__.
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.28.0.schema.json
 PackageIdentifier: duckvhuynh.QuickCopy
 PackageVersion: __VERSION__
 PackageLocale: en-US
@@ -24,4 +24,4 @@ Tags:
   - vietnamese
 ReleaseNotesUrl: https://github.com/duckvhuynh/quickcopy/releases/tag/v__VERSION__
 ManifestType: defaultLocale
-ManifestVersion: 1.10.0
+ManifestVersion: 1.28.0
