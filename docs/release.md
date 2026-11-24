@@ -7,7 +7,7 @@ Each release has three assets:
 
 | Asset | What it is |
 | --- | --- |
-| `QuickCopy-X.Y.Z-windows-x64.zip` | Folder `QuickCopy/` with `quickcopy.exe`, `models/viesvtr/vi_syllables.bin`, `README.txt` (the short user guide in `packaging/README.txt`) and the license files |
+| `QuickCopy-X.Y.Z-windows-x64.zip` | Folder `QuickCopy/` with `quickcopy.exe`, `models/viesvtr/vi_syllables.bin`, `runtime/` (ONNX Runtime from Microsoft's NuGet package, pinned in `scripts/package.ps1`, and the Visual C++ runtime DLLs it needs), `README.txt` (the short user guide in `packaging/README.txt`) and the license files |
 | `quickcopy-X.Y.Z-windows-x64.exe` | The bare exe, which the in-app updater downloads |
 | `SHA256SUMS.txt` | One `<sha256>  <asset name>` line per asset |
 

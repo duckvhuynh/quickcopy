@@ -1,0 +1,4 @@
+# Link the C runtime into quickcopy.exe, so it starts on a Windows without
+# the Visual C++ Redistributable.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

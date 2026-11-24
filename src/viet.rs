@@ -54,7 +54,13 @@ pub struct Recognizer {
 fn environment() -> Result<ort::environment::Environment, String> {
     static ENV: std::sync::OnceLock<Result<ort::environment::Environment, String>> = std::sync::OnceLock::new();
     ENV.get_or_init(|| {
-        let runtime = runtime_path().ok_or("onnxruntime.dll not found next to the exe or in System32")?;
+        let runtime = runtime_path().ok_or("onnxruntime.dll not found in runtime\\, next to the exe or in System32")?;
+        crate::common::log(format!("ONNX Runtime: {}", runtime.display()));
+        // The Visual C++ runtime DLLs it needs sit beside it in runtime\.
+        #[cfg(windows)]
+        if let Some(dir) = runtime.parent() {
+            let _ = unsafe { windows::Win32::System::LibraryLoader::SetDllDirectoryW(&windows::core::HSTRING::from(dir)) };
+        }
         ort::init_from(&runtime)
             .map_err(|e| format!("loading {}: {e}", runtime.display()))?
             .with_telemetry(false)
@@ -233,11 +239,12 @@ pub fn model_path() -> Option<PathBuf> {
     find(MODEL_FILE)
 }
 
-/// ONNX Runtime: a copy next to the exe wins, else the one Windows 11 ships.
+/// ONNX Runtime: the copy in the release zip's `runtime\` folder, then one
+/// next to the exe, else the one Windows 11 ships.
 fn runtime_path() -> Option<PathBuf> {
-    let local = std::env::current_exe().ok()?.with_file_name("onnxruntime.dll");
-    let system = PathBuf::from(std::env::var_os("SystemRoot")?).join("System32").join("onnxruntime.dll");
-    [local, system].into_iter().find(|p| p.is_file())
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let system = PathBuf::from(std::env::var_os("SystemRoot")?).join("System32");
+    [dir.join("runtime"), dir, system].into_iter().map(|d| d.join("onnxruntime.dll")).find(|p| p.is_file())
 }
 
 /// Width after resizing to HEIGHT, rounded up to the model's stride.

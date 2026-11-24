@@ -7,6 +7,17 @@ and QuickCopy uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- QuickCopy did not start on a Windows without the Visual C++
+  Redistributable. The exe now links the C runtime statically.
+
+### Changed
+
+- The zip carries ONNX Runtime 1.32 in `runtime\`, with the Visual C++
+  runtime DLLs it needs, so Vietnamese text recognition works on Windows 10
+  without copying `onnxruntime.dll` by hand.
+
 ## [0.1.1] - 2026-11-24
 
 ### Changed

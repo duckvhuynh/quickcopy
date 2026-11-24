@@ -51,17 +51,26 @@ file format and the command to rebuild it. The table is published under
 CC BY-SA 4.0 because it is derived from text under that license. It is not
 covered by QuickCopy's MIT OR Apache-2.0 license.
 
-## ONNX Runtime (not distributed)
+## ONNX Runtime (in the release zip)
 
-- Project: ONNX Runtime, <https://github.com/microsoft/onnxruntime>, by
-  Microsoft.
-- License: MIT.
+- Project: ONNX Runtime, <https://onnxruntime.ai>, by Microsoft.
+- File: `runtime\onnxruntime.dll` 1.32.0, from Microsoft's NuGet package
+  `Microsoft.ML.OnnxRuntime`, signed by Microsoft.
+- License: MIT. The zip has its license as
+  `runtime\onnxruntime-LICENSE.txt` and its third-party notices as
+  `runtime\onnxruntime-ThirdPartyNotices.txt`.
 
 QuickCopy loads `onnxruntime.dll` at runtime, only for Vietnamese text
-recognition. It uses the copy next to `quickcopy.exe` if there is one,
-otherwise the copy Windows 11 ships in `System32`. QuickCopy does not ship
-ONNX Runtime. A user who puts a copy next to the executable gets it from
-Microsoft under its own license.
+recognition: the copy in `runtime\`, else one next to `quickcopy.exe`, else
+the copy Windows 11 has in `System32`.
+
+## Microsoft Visual C++ runtime (in the release zip)
+
+`runtime\` also has `msvcp140.dll`, `msvcp140_1.dll`, `vcruntime140.dll`
+and `vcruntime140_1.dll`, which `onnxruntime.dll` needs. They are
+redistributable files of Microsoft Visual Studio, shipped with QuickCopy
+under the Visual Studio license terms for redistribution.
+`quickcopy.exe` links the C runtime statically.
 
 ## Windows components
 

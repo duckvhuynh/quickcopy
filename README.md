@@ -95,8 +95,9 @@ To stop using the model, turn off **Vietnamese text recognition** in the
 settings, then delete the file; QuickCopy does not download it again while
 the setting is off.
 
-On Windows 10, also put `onnxruntime.dll` version 1.17 or newer next to
-`quickcopy.exe`. Windows 11 already has a copy in `System32`.
+The model runs on ONNX Runtime, which the release zip carries in its
+`runtime\` folder with the Visual C++ runtime it needs, so this works on
+Windows 10 as well as Windows 11.
 
 To install the model by hand instead, save `weights/viesvtr_v7.onnx` from
 the model's page as `models\viesvtr\viesvtr_v7.onnx` in that
@@ -211,9 +212,9 @@ prints what the check finds without installing anything.
   Get-WindowsCapability -Online -Name "Language.OCR*" | Where-Object State -eq Installed
   ```
 
-- For Vietnamese only: the VieSVTR model and ONNX Runtime 1.17 or newer.
-  Windows 11 ships ONNX Runtime in `System32`. On Windows 10, put
-  `onnxruntime.dll` next to `quickcopy.exe`. See
+- For Vietnamese only: the VieSVTR model, which QuickCopy downloads, and
+  ONNX Runtime 1.17 or newer, which is in the zip's `runtime\` folder
+  (without it, QuickCopy uses the copy Windows 11 has in `System32`). See
   [Vietnamese text recognition](#vietnamese-text-recognition).
 
 ## Build from source

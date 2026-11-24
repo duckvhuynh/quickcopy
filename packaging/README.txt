@@ -32,8 +32,8 @@ The model is licensed CC BY-NC 4.0
 non-commercial purposes only. To stop using it, turn off "Vietnamese text
 recognition" in the settings, then delete that file.
 
-On Windows 10, also put onnxruntime.dll (version 1.17 or newer) next to
-quickcopy.exe. Windows 11 already has it.
+The model runs on ONNX Runtime by Microsoft (MIT license), which is in the
+runtime\ folder with the Visual C++ runtime it needs.
 
 Updates
 -------
@@ -48,6 +48,9 @@ quickcopy.exe                       the program
 models\viesvtr\vi_syllables.bin     Vietnamese syllable frequencies that pick
                                     tone marks (from Vietnamese Wikipedia,
                                     CC BY-SA 4.0)
+runtime\                            ONNX Runtime 1.32 (onnxruntime.dll, its
+                                    license and notices) and the Visual C++
+                                    runtime DLLs it needs
 LICENSE-MIT, LICENSE-APACHE         QuickCopy's license (either one)
 THIRD-PARTY-NOTICES.md              what QuickCopy uses from others
 
@@ -74,8 +77,8 @@ lần đầu chạy, QuickCopy tự tải model (30,7 MB) từ trang trên, ki�
 SHA-256 và lưu vào %LOCALAPPDATA%\QuickCopy\models\viesvtr\. Nếu lúc đó
 không có mạng, ứng dụng tải lại ở lần chạy sau, hoặc khi bấm "Thử lại"
 trong cài đặt. Model dùng giấy phép CC BY-NC 4.0: chỉ được dùng cho mục
-đích phi thương mại. Trên Windows 10 cần thêm onnxruntime.dll (1.17 trở
-lên) đặt cạnh quickcopy.exe; Windows 11 đã có sẵn.
+đích phi thương mại. Model chạy bằng ONNX Runtime có sẵn trong thư mục
+runtime\.
 
 QuickCopy kiểm tra bản mới trên GitHub mỗi ngày và hiện "Cập nhật lên
 X.Y.Z" ở menu khay và trong cài đặt; tệp tải về được kiểm tra mã SHA-256
