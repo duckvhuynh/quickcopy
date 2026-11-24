@@ -136,9 +136,9 @@ enum Seen {
 struct Facts {
     /// The cursor is an I-beam: the app shows text there (real hovers only).
     ibeam: bool,
+    /// The type of the element UI Automation finds at the point, which is the
+    /// deepest one there: nothing of its own lies under the point.
     control_type: UIA_CONTROLTYPE_ID,
-    named: bool,
-    has_children: bool,
     /// It has a text pattern: an editor or a document (Notepad, Word).
     text: bool,
     web: bool,
@@ -152,15 +152,19 @@ enum Verdict {
     Surface,
 }
 
-/// Element types that are only an area an app draws in when they are bare
-/// (unnamed or empty). Every other type is a control or text of its own.
+/// Element types that are only an area an app draws in, when nothing of
+/// theirs is at the point. Every other type is a control or text of its own.
 const DRAWN: [UIA_CONTROLTYPE_ID; 5] = [UIA_PaneControlTypeId, UIA_CustomControlTypeId, UIA_GroupControlTypeId, UIA_DocumentControlTypeId, UIA_WindowControlTypeId];
 
 /// The first row that matches decides. `page_content` says whether a web
 /// page shows its own content (text, links, controls) in the area that would
 /// be read; it is asked only when that decides, as it costs 16 queries.
 fn classify(f: Facts, page_content: impl FnOnce() -> bool) -> Verdict {
-    let bare = DRAWN.contains(&f.control_type) && !f.text && (!f.named || !f.has_children);
+    // A text pattern marks an editor, or a web page's own document. A point
+    // that hits the document is the page's margin, or anywhere on a page
+    // whose tree does not resolve points (Chromium before it turns on full
+    // accessibility), where the page's own text would be read too.
+    let bare = DRAWN.contains(&f.control_type) && !f.text;
     match (f.picture, f.ibeam, bare) {
         (Some(Seen::Tree), _, _) => Verdict::Picture,
         (_, true, _) => Verdict::Native,
@@ -352,8 +356,6 @@ impl Detector {
             let facts = Facts {
                 ibeam,
                 control_type,
-                named: !element.CurrentName()?.is_empty(),
-                has_children: self.uia.RawViewWalker()?.GetFirstChildElement(&element).is_ok(),
                 text: element.GetCurrentPropertyValue(UIA_IsTextPatternAvailablePropertyId).is_ok_and(|v| bool::try_from(&v).unwrap_or(false)),
                 web: is_web(&element),
                 picture: picture.as_ref().map(|(seen, _)| *seen),
@@ -1787,9 +1789,9 @@ mod tests {
         lines.iter().map(|l| l.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join(" ")).collect()
     }
 
-    /// A bare unnamed pane of a desktop app, nothing found in it.
+    /// A pane of a desktop app with nothing found in it.
     fn bare() -> Facts {
-        Facts { ibeam: false, control_type: UIA_PaneControlTypeId, named: false, has_children: false, text: false, web: false, picture: None }
+        Facts { ibeam: false, control_type: UIA_PaneControlTypeId, text: false, web: false, picture: None }
     }
 
     fn unasked() -> bool {
@@ -1799,13 +1801,12 @@ mod tests {
     #[test]
     fn a_bare_area_is_read_and_text_or_a_control_is_left_alone() {
         assert_eq!(classify(bare(), unasked), Verdict::Surface);
-        // Paint's canvas: named, nothing inside.
-        assert_eq!(classify(Facts { control_type: UIA_CustomControlTypeId, named: true, ..bare() }, unasked), Verdict::Surface);
-        assert_eq!(classify(Facts { control_type: UIA_WindowControlTypeId, ..bare() }, unasked), Verdict::Surface);
-        // A named panel with elements inside: the app's own layout.
-        assert_eq!(classify(Facts { named: true, has_children: true, ..bare() }, unasked), Verdict::Native);
+        // Paint's canvas, a game's window.
+        for drawn in [UIA_GroupControlTypeId, UIA_CustomControlTypeId, UIA_WindowControlTypeId, UIA_DocumentControlTypeId] {
+            assert_eq!(classify(Facts { control_type: drawn, ..bare() }, unasked), Verdict::Surface, "control type {}", drawn.0);
+        }
         // Notepad's text: a document with a text pattern.
-        assert_eq!(classify(Facts { control_type: UIA_DocumentControlTypeId, named: true, text: true, ..bare() }, unasked), Verdict::Native);
+        assert_eq!(classify(Facts { control_type: UIA_DocumentControlTypeId, text: true, ..bare() }, unasked), Verdict::Native);
         for control in [UIA_EditControlTypeId, UIA_TextControlTypeId, UIA_ListItemControlTypeId, UIA_ListControlTypeId, UIA_ButtonControlTypeId, UIA_HyperlinkControlTypeId, UIA_TreeItemControlTypeId, UIA_MenuItemControlTypeId] {
             assert_eq!(classify(Facts { control_type: control, ..bare() }, unasked), Verdict::Native, "control type {}", control.0);
         }
@@ -1828,6 +1829,10 @@ mod tests {
         let page = Facts { control_type: UIA_GroupControlTypeId, web: true, ..bare() };
         assert_eq!(classify(page, || true), Verdict::Native);
         assert_eq!(classify(page, || false), Verdict::Surface);
+        // The page's own document, as Chromium answers for any point before
+        // it resolves points to elements: the page's text is there too.
+        let document = Facts { control_type: UIA_DocumentControlTypeId, text: true, ..page };
+        assert_eq!(classify(document, unasked), Verdict::Native);
         let picture = Facts { picture: Some(Seen::Pixels), ..page };
         assert_eq!(classify(picture, || true), Verdict::Native);
         assert_eq!(classify(picture, || false), Verdict::Picture);
