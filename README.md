@@ -30,6 +30,8 @@ of memory while idle and never touches the GPU.
 - Works on images in browsers and desktop apps, including apps like Zalo
   that hide their images from accessibility tools. Tested in Edge, Brave,
   Firefox, Facebook's photo viewer, Zalo, Photos, Media Player and VLC.
+- Reads whatever a desktop app draws itself, such as a canvas, a game or a
+  remote desktop. Only real text and controls are left to the app.
 - Reads the frame of a paused video in the browser, Media Player and VLC,
   and leaves a playing video alone.
 - Selects like a text editor: drag, double-click a word, triple-click a
@@ -127,7 +129,8 @@ the model's page as `models\viesvtr\viesvtr_v7.onnx` in that
 
 Rest the cursor on an image for a moment. QuickCopy reads it and lays a
 transparent overlay over its text lines. Clicks elsewhere on the image
-still go to the app underneath.
+still go to the app underneath. In an area a desktop app draws itself, a
+click on its text goes to the app as well, and a drag selects.
 
 - Drag over text to select it. The drag can start a little before or after
   a line.

@@ -7,7 +7,20 @@ and QuickCopy uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Text in anything a desktop app draws itself is read too, not only
+  pictures: a canvas, a game, a remote desktop, a meeting's shared screen.
+  QuickCopy now asks whether the cursor is on real text or a control the
+  user can already use, and reads everything else. A click on text there
+  still reaches the app; a drag selects. Web pages and Chromium apps
+  (Teams, Discord, VS Code) are read only where they show a picture or a
+  video, as their own text is selectable already.
+
 ### Fixed
+
+- When a page put another picture where the cursor rested (X going to the
+  next post), the overlay could keep showing the old one.
 
 - Pictures in Teams' photo viewer were not found: Teams reports the chat
   behind the viewer under the cursor. When one was found, the chat around
@@ -15,8 +28,9 @@ and QuickCopy uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Paused TikTok videos were not read: TikTok lays a layer over the video,
   and the video is not in the accessibility tree.
 - An animated picture (a GIF in an email) took the overlay away each time
-  it changed frame, which ended a drag and the copy. The overlay now shows
-  the frame it read, like a paused video, until the cursor leaves.
+  it changed frame, which ended a drag and the copy. Once a picture changes
+  twice in a few seconds, the overlay shows the frame it read, like a
+  paused video, until the cursor leaves.
 - A spinner or another small animation in a picture, or a window over a
   corner of it, kept the picture from being read.
 - A picture as wide as its viewer (a wide screenshot) was not found from
