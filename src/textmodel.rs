@@ -384,15 +384,16 @@ impl TextModel {
 /// form one paragraph; a far-off caption keeps its own smaller area, so the
 /// rest of the image still gets the app's own clicks and drags.
 ///
-/// On a paused video (`video`) the margin is one line height sideways and a
-/// third above and below: players put their controls right next to the
-/// picture's text (the seek bar under a subtitle), and they keep their clicks.
-pub fn grab_areas(lines: &[RECT], video: bool) -> Vec<RECT> {
+/// On a paused video or an app's own surface (`tight`) the margin is one line
+/// height sideways and a third above and below: players and apps put their
+/// controls right next to text (the seek bar under a subtitle), and they keep
+/// their drags.
+pub fn grab_areas(lines: &[RECT], tight: bool) -> Vec<RECT> {
     paragraphs(lines)
         .into_iter()
         .map(|p| {
             let (b, h) = (p.rect, p.line_height);
-            let (dx, dy) = if video { (h, h / 3) } else { ((3 * h).max(32), (3 * h / 2).max(16)) };
+            let (dx, dy) = if tight { (h, h / 3) } else { ((3 * h).max(32), (3 * h / 2).max(16)) };
             RECT { left: b.left - dx, top: b.top - dy, right: b.right + dx, bottom: b.bottom + dy }
         })
         .collect()

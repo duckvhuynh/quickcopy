@@ -84,7 +84,7 @@ use windows::core::*;
 
 use textmodel::TextModel;
 use translate::{Translated, WM_APP_TRANSLATED};
-use worker::{OcrData, Request, WM_APP_CHANGED, WM_APP_HIDE, WM_APP_PLAYING, WM_APP_SHOW, WM_APP_UPDATE, Word, log};
+use worker::{Kind, OcrData, Request, WM_APP_CHANGED, WM_APP_HIDE, WM_APP_PLAYING, WM_APP_SHOW, WM_APP_UPDATE, Word, log};
 
 const WM_APP_TRAY: u32 = WM_APP + 10;
 const TICK_TIMER: usize = 1;
@@ -1390,7 +1390,7 @@ fn render(app: &App) {
             }
         } else {
             let hit = pixel(0, 0, 0, 1);
-            for area in textmodel::grab_areas(&data.lines, data.video) {
+            for area in textmodel::grab_areas(&data.lines, data.kind != Kind::Image) {
                 fill(px, w, h, area, hit);
             }
         }

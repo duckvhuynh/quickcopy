@@ -41,8 +41,8 @@ pub const WM_APP_CHANGED: u32 = WM_APP + 6;
 /// video's picture move before it counts as playing again.
 const PLAYING_CHECKS: u8 = 3;
 /// Smallest picture an app draws itself that is read (smaller ones are icons).
-const SURFACE_MIN_W: i32 = 100;
-const SURFACE_MIN_H: i32 = 60;
+const PICTURE_MIN_W: i32 = 100;
+const PICTURE_MIN_H: i32 = 60;
 /// Two captures this far apart tell a playing video from a paused one (a
 /// frame lasts 17-42 ms at 24-60 fps).
 const VIDEO_FRAME: Duration = Duration::from_millis(150);
@@ -79,17 +79,119 @@ pub struct OcrData {
     pub id: u64,
     /// Words are Windows OCR's; the Vietnamese reading is still coming.
     pub pending: bool,
-    /// A paused video's frame, not an image (see `textmodel::grab_areas`).
-    pub video: bool,
+    pub kind: Kind,
     /// The pixels that were read (BGRA, `rect`'s size), drawn by the overlay
     /// when the picture goes on to change while text is selected.
     pub frame: std::sync::Arc<Vec<u8>>,
 }
 
 impl OcrData {
-    fn new(rect: RECT, words: Vec<Word>, id: u64, pending: bool, video: bool, frame: std::sync::Arc<Vec<u8>>) -> Self {
-        Self { rect, lines: line_rects(&words), words, id, pending, video, frame }
+    fn new(rect: RECT, words: Vec<Word>, id: u64, pending: bool, kind: Kind, frame: std::sync::Arc<Vec<u8>>) -> Self {
+        Self { rect, lines: line_rects(&words), words, id, pending, kind, frame }
     }
+}
+
+/// What was read, which decides how the overlay takes the mouse.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    Image,
+    /// A paused video's frame (see `textmodel::grab_areas`).
+    Video,
+    /// A bare area of an app (see `Under::Surface`): a click on its text
+    /// goes to the app, only a drag selects.
+    Surface,
+}
+
+/// What is under the cursor (see `classify`).
+enum Under {
+    /// Real text or a control the user can already use: left alone.
+    Native,
+    Picture(Region),
+    /// A bare area an app draws in, with no picture found there and nothing
+    /// of its own exposed: whatever it shows is read from pixels.
+    Surface(Region),
+}
+
+/// Where to read, and what tells that it moved or started playing.
+struct Region {
+    clip: RECT,
+    /// The element and its rect, to notice it moving.
+    tracked: Option<(IUIAutomationElement, RECT)>,
+    media: Option<Media>,
+    /// It may be a video: read once it stops moving.
+    may_play: bool,
+}
+
+/// Where a picture under the point was found.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Seen {
+    /// In the accessibility tree: an image, a video, a picture an app draws.
+    Tree,
+    /// From pixels alone: an app without a tree, or a picture a page leaves out of it.
+    Pixels,
+}
+
+/// What `classify` decides from.
+#[derive(Clone, Copy, Debug)]
+struct Facts {
+    /// The cursor is an I-beam: the app shows text there (real hovers only).
+    ibeam: bool,
+    control_type: UIA_CONTROLTYPE_ID,
+    named: bool,
+    has_children: bool,
+    /// It has a text pattern: an editor or a document (Notepad, Word).
+    text: bool,
+    web: bool,
+    picture: Option<Seen>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Verdict {
+    Native,
+    Picture,
+    Surface,
+}
+
+/// Element types that are only an area an app draws in when they are bare
+/// (unnamed or empty). Every other type is a control or text of its own.
+const DRAWN: [UIA_CONTROLTYPE_ID; 5] = [UIA_PaneControlTypeId, UIA_CustomControlTypeId, UIA_GroupControlTypeId, UIA_DocumentControlTypeId, UIA_WindowControlTypeId];
+
+/// The first row that matches decides. `page_content` says whether a web
+/// page shows its own content (text, links, controls) in the area that would
+/// be read; it is asked only when that decides, as it costs 16 queries.
+fn classify(f: Facts, page_content: impl FnOnce() -> bool) -> Verdict {
+    let bare = DRAWN.contains(&f.control_type) && !f.text && (!f.named || !f.has_children);
+    match (f.picture, f.ibeam, bare) {
+        (Some(Seen::Tree), _, _) => Verdict::Picture,
+        (_, true, _) => Verdict::Native,
+        (None, _, false) => Verdict::Native,
+        _ if f.web && page_content() => Verdict::Native,
+        (Some(Seen::Pixels), _, _) => Verdict::Picture,
+        (None, _, true) => Verdict::Surface,
+    }
+}
+
+/// Largest part of a surface read at once (physical pixels): a bigger one is
+/// read around the cursor, which keeps a read well under a second.
+const SURFACE_MAX_W: i32 = 1400;
+const SURFACE_MAX_H: i32 = 900;
+
+/// The part of a surface's `area` read for a rest at `pt`: all of it when it
+/// fits, else a box of the largest size with the cursor in its middle half.
+/// The box moves in steps of half its size, so rests near each other read
+/// the same pixels and hit the cache.
+fn surface_box(pt: POINT, area: RECT) -> RECT {
+    let span = |lo: i32, hi: i32, p: i32, size: i32| {
+        if hi - lo <= size {
+            return (lo, hi);
+        }
+        let step = size / 2;
+        let start = (lo + (p - lo - step / 2).div_euclid(step) * step).clamp(lo, hi - size);
+        (start, start + size)
+    };
+    let (left, right) = span(area.left, area.right, pt.x, SURFACE_MAX_W);
+    let (top, bottom) = span(area.top, area.bottom, pt.y, SURFACE_MAX_H);
+    RECT { left, top, right, bottom }
 }
 
 /// What a revalidation found.
@@ -199,16 +301,11 @@ impl Detector {
             .unwrap_or_default()
     }
 
-    /// Finds the image (or paused video) under `pt` and OCRs it. `report`
-    /// gets the result as soon as Windows OCR has the words (`Stage::Show`,
-    /// marked pending when Vietnamese is still being read), then the final
-    /// words (`Stage::Update`). `from_cursor` is false for prefetching, where
-    /// the cursor is elsewhere.
-    fn detect(&mut self, pt: POINT, from_cursor: bool, report: &mut dyn FnMut(Stage, OcrData)) -> Result<Found> {
-        let t0 = Instant::now();
+    /// What is under `pt` (see `classify`), and the element there.
+    fn under(&mut self, pt: POINT, from_cursor: bool) -> Result<(Under, IUIAutomationElement)> {
         let mut element = unsafe { self.uia.ElementFromPoint(pt)? };
         if unsafe { element.CurrentProcessId()? } == self.own_pid {
-            return Ok(Found::Nothing);
+            return Ok((Under::Native, element));
         }
         let mut control_type = unsafe { element.CurrentControlType()? };
         // Chrome/Edge build their accessibility tree only after the first
@@ -232,6 +329,7 @@ impl Detector {
                 }
             }
         }
+        let ibeam = from_cursor && !self.ignore_cursor && cursor_is_ibeam();
         // A photo viewer open over a web app can be left out of hit testing:
         // Teams' viewer answers with the chat behind it (a tree item, a
         // heading). The cursor tells: over that text the page would show an
@@ -241,7 +339,7 @@ impl Detector {
         let behind = [UIA_TextControlTypeId, UIA_TreeItemControlTypeId, UIA_ListItemControlTypeId, UIA_DataItemControlTypeId].contains(&control_type);
         if behind
             && is_web(&element)
-            && !(from_cursor && !self.ignore_cursor && cursor_is_ibeam())
+            && !ibeam
             && image_from_pixels(pt)?.is_some()
             && let Some(cover) = self.covering_image(pt)?
         {
@@ -249,20 +347,48 @@ impl Detector {
             element = cover;
             control_type = UIA_ImageControlTypeId;
         }
+        let picture = self.picture(pt, &element, control_type, ibeam)?;
+        let (facts, element_rect) = unsafe {
+            let facts = Facts {
+                ibeam,
+                control_type,
+                named: !element.CurrentName()?.is_empty(),
+                has_children: self.uia.RawViewWalker()?.GetFirstChildElement(&element).is_ok(),
+                text: element.GetCurrentPropertyValue(UIA_IsTextPatternAvailablePropertyId).is_ok_and(|v| bool::try_from(&v).unwrap_or(false)),
+                web: is_web(&element),
+                picture: picture.as_ref().map(|(seen, _)| *seen),
+            };
+            (facts, element.CurrentBoundingRectangle()?)
+        };
+        let surface = visible_rect(pt, element_rect).map(|r| surface_box(pt, r));
+        let area = picture.as_ref().map(|(_, region)| region.clip).or(surface);
+        let verdict = classify(facts, || area.is_some_and(|a| self.page_content_in(a).unwrap_or(true)));
+        log(format!("at {},{}: {verdict:?} ({facts:?})", pt.x, pt.y));
+        let under = match (verdict, picture, surface) {
+            (Verdict::Picture, Some((_, region)), _) => Under::Picture(region),
+            (Verdict::Surface, _, Some(clip)) => Under::Surface(Region { clip, tracked: Some((element.clone(), element_rect)), media: None, may_play: false }),
+            _ => Under::Native,
+        };
+        Ok((under, element))
+    }
+
+    /// The picture or video under `pt`, found the way that fits the element
+    /// there, and where it was seen.
+    fn picture(&self, pt: POINT, element: &IUIAutomationElement, control_type: UIA_CONTROLTYPE_ID, ibeam: bool) -> Result<Option<(Seen, Region)>> {
         // A <video> is a group like any <div>; the tag says which.
         let video = if control_type == UIA_GroupControlTypeId { crate::video::video_at(pt) } else { None };
-        let mut media = video.map(|_| Media::Tab(unsafe { GetAncestor(WindowFromPoint(pt), GA_ROOT) }));
+        let media = video.map(|_| Media::Tab(unsafe { GetAncestor(WindowFromPoint(pt), GA_ROOT) }));
         // Pictures that may be a video: read once they stop moving.
         let mut may_play = media.is_some();
         // A photo inside a link or button that UI Automation reports in its
         // place (Threads: a link named "Photo by ..."). With an <img alt="">
         // the photo is not in the tree at all, and the link is empty: a big
         // link with nothing inside is taken for the picture it shows.
-        let wrapped = if [UIA_HyperlinkControlTypeId, UIA_ButtonControlTypeId].contains(&control_type) && is_web(&element) {
+        let wrapped = if [UIA_HyperlinkControlTypeId, UIA_ButtonControlTypeId].contains(&control_type) && is_web(element) {
             crate::video::image_at(pt).or_else(|| {
                 let r = unsafe { element.CurrentBoundingRectangle() }.ok()?;
-                let empty = unsafe { self.uia.RawViewWalker().and_then(|w| w.GetFirstChildElement(&element)) }.is_err();
-                (empty && r.right - r.left >= SURFACE_MIN_W && r.bottom - r.top >= SURFACE_MIN_H).then_some(r)
+                let empty = unsafe { self.uia.RawViewWalker().and_then(|w| w.GetFirstChildElement(element)) }.is_err();
+                (empty && r.right - r.left >= PICTURE_MIN_W && r.bottom - r.top >= PICTURE_MIN_H).then_some(r)
             })
         } else {
             None
@@ -272,8 +398,8 @@ impl Detector {
         // "Watch in full screen" over the whole card, and only the video's
         // poster image is in the tree, in the video's place. It is read as
         // a video: once its picture stops moving.
-        let layered = if video.is_none() && wrapped.is_none() && control_type == UIA_GroupControlTypeId && is_web(&element) {
-            self.image_inside(&element, pt)?
+        let layered = if video.is_none() && wrapped.is_none() && control_type == UIA_GroupControlTypeId && is_web(element) {
+            self.image_inside(element, pt)?
         } else {
             None
         };
@@ -281,7 +407,7 @@ impl Detector {
             may_play = true;
         }
         let wrapped = wrapped.or(layered);
-        let (clip, tracked) = if control_type == UIA_ImageControlTypeId || video.is_some() || wrapped.is_some() {
+        if control_type == UIA_ImageControlTypeId || video.is_some() || wrapped.is_some() {
             let element_rect = unsafe { element.CurrentBoundingRectangle()? };
             // The element UI Automation found may be a box around the video
             // (or photo): the video's own rect is what gets read; the element
@@ -291,7 +417,7 @@ impl Detector {
                 _ => (element_rect, Some(element.clone())),
             };
             let Some(mut clip) = visible_rect(pt, element_rect) else {
-                return Ok(Found::Nothing);
+                return Ok(None);
             };
             // A photo viewer can report its whole stage as the picture
             // (Teams: a role="img" box over the dimmed chat), and reading all
@@ -304,57 +430,54 @@ impl Detector {
                 log(format!("picture {}x{} inside a {}x{} image element", photo.right - photo.left, photo.bottom - photo.top, clip.right - clip.left, clip.bottom - clip.top));
                 clip = photo;
             }
-            (clip, tracked.map(|e| (e, element_rect)))
-        } else if control_type == UIA_PaneControlTypeId && self.is_chromium_without_tree(pt, &element) {
-            // Electron app with accessibility turned off (e.g. Zalo): find the image from pixels.
-            if from_cursor && !self.ignore_cursor && cursor_is_ibeam() {
-                log("pixel mode: cursor is over real text".into());
-                return Ok(Found::Nothing);
+            return Ok(Some((Seen::Tree, Region { clip, tracked: tracked.map(|e| (e, element_rect)), media, may_play })));
+        }
+        // From pixels: an Electron app with accessibility turned off (Zalo),
+        // and on a web page a picture it leaves out of the tree (an <img
+        // alt="">, as in Facebook's photo viewer, or a CSS background). Under
+        // an I-beam the app shows text, which `classify` leaves alone.
+        let pixel_only = control_type == UIA_PaneControlTypeId && self.is_chromium_without_tree(pt, element);
+        let page_box = (control_type == UIA_GroupControlTypeId || control_type == UIA_DocumentControlTypeId) && is_web(element);
+        if pixel_only || page_box {
+            if ibeam {
+                return Ok(None);
             }
-            let Some(clip) = image_from_pixels(pt)? else {
-                return Ok(Found::Nothing);
-            };
-            (clip, None)
-        } else if (control_type == UIA_GroupControlTypeId || control_type == UIA_DocumentControlTypeId) && is_web(&element) {
-            // Nothing the page exposes is under the point, but a picture may
-            // be: browsers leave an <img alt=""> out of the tree (Facebook's
-            // photo viewer), and a CSS background is never in it. Found from
-            // pixels, unless the page shows its own content there (a box of
-            // text and images, whose text can be selected as it is).
-            if from_cursor && !self.ignore_cursor && cursor_is_ibeam() {
-                return Ok(Found::Nothing);
+            return Ok(image_from_pixels(pt)?.map(|clip| (Seen::Pixels, Region { clip, tracked: None, media: None, may_play: false })));
+        }
+        // A picture the app draws itself (an image viewer's canvas, a video
+        // player's video). Without a media session it may still be a video
+        // (VLC has none): its moving picture tells.
+        let Some(media) = self.drawn_picture(element, control_type)? else {
+            return Ok(None);
+        };
+        let element_rect = unsafe { element.CurrentBoundingRectangle()? };
+        Ok(visible_rect(pt, element_rect).map(|clip| (Seen::Tree, Region { clip, tracked: Some((element.clone(), element_rect)), media, may_play: true })))
+    }
+
+    /// Finds the image (or paused video) under `pt` and OCRs it. `report`
+    /// gets the result as soon as Windows OCR has the words (`Stage::Show`,
+    /// marked pending when Vietnamese is still being read), then the final
+    /// words (`Stage::Update`). `from_cursor` is false for prefetching, where
+    /// the cursor is elsewhere.
+    fn detect(&mut self, pt: POINT, from_cursor: bool, report: &mut dyn FnMut(Stage, OcrData)) -> Result<Found> {
+        let t0 = Instant::now();
+        let (under, element) = self.under(pt, from_cursor)?;
+        let (Region { clip, tracked, media, may_play }, kind) = match under {
+            Under::Native => return Ok(Found::Nothing),
+            // Prefetching (a window came to the front) reads pictures only:
+            // a surface is read where the cursor rests.
+            Under::Surface(_) if !from_cursor => return Ok(Found::Nothing),
+            Under::Surface(region) => (region, Kind::Surface),
+            Under::Picture(region) => {
+                let kind = if region.media.is_some() { Kind::Video } else { Kind::Image };
+                (region, kind)
             }
-            let Some(clip) = image_from_pixels(pt)? else {
-                return Ok(Found::Nothing);
-            };
-            if self.page_content_in(clip)? {
-                return Ok(Found::Nothing);
-            }
-            (clip, None)
-        } else if let Some(surface) = self.surface(&element, control_type)? {
-            // A picture the app draws itself (an image viewer's canvas, a
-            // video player's video). Without a media session it may still be
-            // a video (VLC has none): its moving picture tells.
-            media = surface;
-            may_play = true;
-            let element_rect = unsafe { element.CurrentBoundingRectangle()? };
-            let Some(clip) = visible_rect(pt, element_rect) else {
-                return Ok(Found::Nothing);
-            };
-            (clip, Some((element.clone(), element_rect)))
-        } else {
-            if cfg!(debug_assertions) {
-                let class = unsafe { element.CurrentClassName() }.map(|s| s.to_string()).unwrap_or_default();
-                log(format!("not an image: control type {} class {class:?}", control_type.0));
-            }
-            return Ok(Found::Nothing);
         };
 
         let (w, h) = (clip.right - clip.left, clip.bottom - clip.top);
         // The same pixels read differently in Vietnamese mode.
         let mode = if VIETNAMESE.load(Ordering::Relaxed) { 0x9E37_79B9_7F4A_7C15 } else { 0 };
         let mut pixels = capture(clip, w, h)?;
-        let is_video = media.is_some();
         if may_play {
             match self.paused_frame(clip, media, &pixels)? {
                 Some(frame) => pixels = frame,
@@ -381,7 +504,7 @@ impl Detector {
         if let Some(words) = self.cache.get(&key) {
             log(format!("cache hit {w}x{h} in {:?}", t0.elapsed()));
             if !words.is_empty() {
-                report(Stage::Show, OcrData::new(clip, words.clone(), key, false, is_video, frame));
+                report(Stage::Show, OcrData::new(clip, words.clone(), key, false, kind, frame));
             }
             return Ok(Found::Image(current));
         }
@@ -409,7 +532,7 @@ impl Detector {
         }
         // The Windows OCR words go out without waiting for the model.
         let vietnamese = VIETNAMESE.load(Ordering::Relaxed) && !self.viet_failed;
-        report(Stage::Show, OcrData::new(clip, first.clone(), key, vietnamese, is_video, frame.clone()));
+        report(Stage::Show, OcrData::new(clip, first.clone(), key, vietnamese, kind, frame.clone()));
         self.finish_loading(loading);
 
         let words = if vietnamese {
@@ -420,7 +543,7 @@ impl Detector {
                 None => first,
             };
             log(format!("vietnamese ready in {:?}", t0.elapsed()));
-            report(Stage::Update, OcrData::new(clip, words.clone(), key, false, is_video, frame));
+            report(Stage::Update, OcrData::new(clip, words.clone(), key, false, kind, frame));
             words
         } else {
             first
@@ -457,18 +580,19 @@ impl Detector {
     /// `CoreWindow`), when the app has a media session. Returns the video's
     /// media session (`Some(Some(_))` for a media player).
     ///
-    /// Left alone: web pages (their images and videos are found as such,
+    /// Not pictures: web pages (their images and videos are found as such,
     /// and a <div> is unnamed and empty too), named canvases (Paint's is
-    /// "Using Brush tool on Canvas": an editor, whose clicks must stay its
-    /// own), top-level windows (games), and small elements (icons).
-    fn surface(&self, element: &IUIAutomationElement, control_type: UIA_CONTROLTYPE_ID) -> Result<Option<Option<Media>>> {
+    /// "Using Brush tool on Canvas": an editor), top-level windows (games),
+    /// and small elements (icons). Those are read as surfaces, whose clicks
+    /// stay the app's (`Kind::Surface`).
+    fn drawn_picture(&self, element: &IUIAutomationElement, control_type: UIA_CONTROLTYPE_ID) -> Result<Option<Option<Media>>> {
         unsafe {
             let framework = element.CurrentFrameworkId()?.to_string();
             if framework == "Chrome" || framework == "Gecko" {
                 return Ok(None);
             }
             let r = element.CurrentBoundingRectangle()?;
-            if r.right - r.left < SURFACE_MIN_W || r.bottom - r.top < SURFACE_MIN_H {
+            if r.right - r.left < PICTURE_MIN_W || r.bottom - r.top < PICTURE_MIN_H {
                 return Ok(None);
             }
             let pid = element.CurrentProcessId()? as u32;
@@ -483,7 +607,7 @@ impl Detector {
                 false
             };
             if surface {
-                log(format!("surface: {} {:?} of {framework:?}, media session: {}", control_type.0, element.CurrentAutomationId()?.to_string(), media.is_some()));
+                log(format!("drawn picture: {} {:?} of {framework:?}, media session: {}", control_type.0, element.CurrentAutomationId()?.to_string(), media.is_some()));
             }
             Ok(surface.then_some(media))
         }
@@ -578,7 +702,7 @@ impl Detector {
         let mut found = None;
         for i in 0..unsafe { images.Length()? } {
             let Ok(r) = (unsafe { images.GetElement(i)?.CurrentBoundingRectangle() }) else { continue };
-            if (r.left..r.right).contains(&pt.x) && (r.top..r.bottom).contains(&pt.y) && r.right - r.left >= SURFACE_MIN_W && r.bottom - r.top >= SURFACE_MIN_H {
+            if (r.left..r.right).contains(&pt.x) && (r.top..r.bottom).contains(&pt.y) && r.right - r.left >= PICTURE_MIN_W && r.bottom - r.top >= PICTURE_MIN_H {
                 found = Some(r);
             }
         }
@@ -1661,6 +1785,75 @@ mod tests {
 
     fn texts(lines: &[Vec<(Box4, String)>]) -> Vec<String> {
         lines.iter().map(|l| l.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join(" ")).collect()
+    }
+
+    /// A bare unnamed pane of a desktop app, nothing found in it.
+    fn bare() -> Facts {
+        Facts { ibeam: false, control_type: UIA_PaneControlTypeId, named: false, has_children: false, text: false, web: false, picture: None }
+    }
+
+    fn unasked() -> bool {
+        panic!("page content asked where it decides nothing")
+    }
+
+    #[test]
+    fn a_bare_area_is_read_and_text_or_a_control_is_left_alone() {
+        assert_eq!(classify(bare(), unasked), Verdict::Surface);
+        // Paint's canvas: named, nothing inside.
+        assert_eq!(classify(Facts { control_type: UIA_CustomControlTypeId, named: true, ..bare() }, unasked), Verdict::Surface);
+        assert_eq!(classify(Facts { control_type: UIA_WindowControlTypeId, ..bare() }, unasked), Verdict::Surface);
+        // A named panel with elements inside: the app's own layout.
+        assert_eq!(classify(Facts { named: true, has_children: true, ..bare() }, unasked), Verdict::Native);
+        // Notepad's text: a document with a text pattern.
+        assert_eq!(classify(Facts { control_type: UIA_DocumentControlTypeId, named: true, text: true, ..bare() }, unasked), Verdict::Native);
+        for control in [UIA_EditControlTypeId, UIA_TextControlTypeId, UIA_ListItemControlTypeId, UIA_ListControlTypeId, UIA_ButtonControlTypeId, UIA_HyperlinkControlTypeId, UIA_TreeItemControlTypeId, UIA_MenuItemControlTypeId] {
+            assert_eq!(classify(Facts { control_type: control, ..bare() }, unasked), Verdict::Native, "control type {}", control.0);
+        }
+        // The app shows an I-beam: real text.
+        assert_eq!(classify(Facts { ibeam: true, ..bare() }, unasked), Verdict::Native);
+    }
+
+    #[test]
+    fn a_picture_is_read_as_one_wherever_it_was_found() {
+        let image = Facts { control_type: UIA_ImageControlTypeId, picture: Some(Seen::Tree), ..bare() };
+        assert_eq!(classify(image, unasked), Verdict::Picture);
+        // An image element stays one under a text cursor (a page's caret).
+        assert_eq!(classify(Facts { ibeam: true, ..image }, unasked), Verdict::Picture);
+        // Found from pixels in an app without a tree (Zalo).
+        assert_eq!(classify(Facts { picture: Some(Seen::Pixels), ..bare() }, unasked), Verdict::Picture);
+    }
+
+    #[test]
+    fn a_web_page_area_is_read_only_without_content_of_its_own() {
+        let page = Facts { control_type: UIA_GroupControlTypeId, web: true, ..bare() };
+        assert_eq!(classify(page, || true), Verdict::Native);
+        assert_eq!(classify(page, || false), Verdict::Surface);
+        let picture = Facts { picture: Some(Seen::Pixels), ..page };
+        assert_eq!(classify(picture, || true), Verdict::Native);
+        assert_eq!(classify(picture, || false), Verdict::Picture);
+        assert_eq!(classify(Facts { ibeam: true, ..page }, unasked), Verdict::Native);
+    }
+
+    #[test]
+    fn a_big_surface_is_read_around_the_cursor_and_rests_nearby_read_the_same_box() {
+        let small = RECT { left: 100, top: 100, right: 900, bottom: 700 };
+        assert_eq!(surface_box(POINT { x: 500, y: 400 }, small), small);
+        let screen = RECT { left: 0, top: 0, right: 3840, bottom: 2160 };
+        let pt = POINT { x: 2000, y: 1100 };
+        let b = surface_box(pt, screen);
+        assert_eq!((b.right - b.left, b.bottom - b.top), (SURFACE_MAX_W, SURFACE_MAX_H));
+        // The cursor in its middle half, the box inside the surface.
+        assert!(b.left + SURFACE_MAX_W / 4 <= pt.x && pt.x < b.right - SURFACE_MAX_W / 4, "{b:?}");
+        assert!(b.top + SURFACE_MAX_H / 4 <= pt.y && pt.y < b.bottom - SURFACE_MAX_H / 4, "{b:?}");
+        assert_eq!(surface_box(POINT { x: 2040, y: 1120 }, screen), b);
+        // At a corner the box stays inside.
+        let corner = surface_box(POINT { x: 3830, y: 5 }, screen);
+        assert_eq!((corner.right, corner.top), (3840, 0));
+        // A surface wider than the box but not taller keeps its height.
+        let strip = RECT { left: -1920, top: 40, right: 1920, bottom: 640 };
+        let s = surface_box(POINT { x: -100, y: 300 }, strip);
+        assert_eq!((s.top, s.bottom, s.right - s.left), (40, 640, SURFACE_MAX_W));
+        assert!(s.left <= -100 && -100 < s.right, "{s:?}");
     }
 
     #[test]
