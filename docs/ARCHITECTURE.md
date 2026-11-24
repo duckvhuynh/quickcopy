@@ -185,11 +185,23 @@ Measured on a 14-line Vietnamese page: the overlay appears about 370 ms
 after the cursor rests on a new image (about 200 ms on an image already
 read), and the Vietnamese text is ready after about 500 ms.
 
-The executable is under 1 MB (972,800 bytes for 0.1.0) and uses no GPU. Direct2D renders in software,
-because a hardware render target held about 31 MB for the life of the
-process and drew these small surfaces slower. QuickCopy uses about 3 MB of
-private memory when idle, and 110-175 MB while the Vietnamese model is
-loaded. The syllable table adds about 12 MB while loaded.
+The executable is about 1 MB (1,097,216 bytes for 0.1.3) and uses no GPU.
+Direct2D renders in software, because a hardware render target held about
+31 MB for the life of the process and drew these small surfaces slower.
+
+Memory of 0.1.3 as Task Manager shows it (private working set; private
+bytes in brackets), sampled from the `Working Set - Private` counter while
+a fresh copy read a Vietnamese image in Paint:
+
+| State | Memory |
+| --- | --- |
+| Idle after start | 3.5 MB (4.5 MB) |
+| Reading, Vietnamese model loaded | 61-66 MB (92-97 MB) |
+| Idle a minute after the last read, model unloaded | 13.3 MB (15.5 MB) |
+
+The peak working set while the model loads is about 205 MB. The memory
+left after the model unloads is ONNX Runtime's environment, which stays
+loaded (`viet::environment`), and the result cache.
 
 Run the benchmarks with
 `cargo test --release bench_ -- --ignored --nocapture`. See

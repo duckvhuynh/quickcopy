@@ -18,8 +18,10 @@ as if it were written in Vietnamese (or any other language Google
 Translate has). QuickCopy reads English and Vietnamese, with every tone
 mark.
 
-It stays out of the way: a 1 MB program in the tray that uses about 3 MB
-of memory while idle and never touches the GPU.
+It stays out of the way: a 1 MB program in the tray that uses about 4 MB
+of memory when it starts and never touches the GPU. Reading Vietnamese
+loads a model that takes about 65 MB while it works; a minute after the
+last read it lets go of it, and QuickCopy sits at about 13 MB.
 
 <!-- TODO: add a short GIF of selecting and translating text in an image,
      saved as docs/images/demo.gif, and show it here:

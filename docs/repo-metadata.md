@@ -12,7 +12,7 @@ gh repo edit duckvhuynh/quickcopy --add-topic ocr,windows,rust,win32,text-recogn
 
 Live Text for Windows. Rest your cursor on any image or paused video, then
 select, copy or translate its text right there. Reads English and
-Vietnamese on your PC. 1 MB, about 3 MB of memory when idle.
+Vietnamese on your PC. 1 MB, about 4 MB of memory when idle.
 
 (Under 350 characters, GitHub's limit.)
 
