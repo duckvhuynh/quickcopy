@@ -84,7 +84,7 @@ use windows::core::*;
 
 use textmodel::TextModel;
 use translate::{Translated, WM_APP_TRANSLATED};
-use worker::{OcrData, Request, WM_APP_HIDE, WM_APP_PLAYING, WM_APP_SHOW, WM_APP_UPDATE, Word, log};
+use worker::{OcrData, Request, WM_APP_CHANGED, WM_APP_HIDE, WM_APP_PLAYING, WM_APP_SHOW, WM_APP_UPDATE, Word, log};
 
 const WM_APP_TRAY: u32 = WM_APP + 10;
 const TICK_TIMER: usize = 1;
@@ -147,6 +147,9 @@ struct App {
     /// The worker found the image changed while a drag or our menu was
     /// going on; the overlay goes when they end.
     stale: bool,
+    /// The picture changed in place under the overlay (an animation): the
+    /// overlay shows the frame that was read, so what is selected is what is seen.
+    frozen: bool,
     /// The window that had focus before the overlay took it.
     prev_foreground: HWND,
     /// The user asked to copy before the Vietnamese reading arrived.
@@ -397,6 +400,7 @@ fn main() -> Result<()> {
                 active: false,
                 menu_open: false,
                 stale: false,
+                frozen: false,
                 prev_foreground: HWND::default(),
                 pending_copy: false,
                 flashing: false,
@@ -478,6 +482,20 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         WM_APP_PLAYING => {
             let rect = unsafe { *Box::from_raw(lp.0 as *mut RECT) };
             with_app(|app| app.playing = Some(rect));
+            LRESULT(0)
+        }
+        WM_APP_CHANGED => {
+            // An animated picture (a GIF in an email) moved on. Reading each
+            // frame would take the overlay away every few seconds, in the
+            // middle of a drag: keep the frame that was read on screen, like a
+            // paused video, until the cursor leaves it.
+            with_app(|app| {
+                if app.data.is_some() && !app.frozen {
+                    log("animated picture: showing the frame that was read".into());
+                    app.frozen = true;
+                    render(app);
+                }
+            });
             LRESULT(0)
         }
         WM_APP_HIDE => {
@@ -667,6 +685,7 @@ fn hide(app: &mut App) {
     app.translating = false;
     app.translation = None;
     app.stale = false;
+    app.frozen = false;
 }
 
 /// The Vietnamese reading arrived for the image on screen: swap the words in,
@@ -1364,9 +1383,16 @@ fn render(app: &App) {
         let px = std::slice::from_raw_parts_mut(bits as *mut u32, (w * h) as usize);
         px.fill(0);
 
-        let hit = pixel(0, 0, 0, 1);
-        for area in textmodel::grab_areas(&data.lines, data.video) {
-            fill(px, w, h, area, hit);
+        if app.frozen && data.frame.len() == px.len() * 4 {
+            // The frame that was read, opaque, under the selection.
+            for (p, c) in px.iter_mut().zip(data.frame.as_chunks::<4>().0) {
+                *p = 0xFF00_0000 | (c[2] as u32) << 16 | (c[1] as u32) << 8 | c[0] as u32;
+            }
+        } else {
+            let hit = pixel(0, 0, 0, 1);
+            for area in textmodel::grab_areas(&data.lines, data.video) {
+                fill(px, w, h, area, hit);
+            }
         }
         if let (Some(model), true, None) = (&app.model, app.has_selection(), &app.translation) {
             let color = if app.flashing {

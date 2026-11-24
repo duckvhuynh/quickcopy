@@ -190,6 +190,45 @@ pub fn find_image_rect(px: &[u8], w: usize, h: usize, cx: usize, cy: usize) -> O
         .find(|(_, bg)| diff(*bg, main_bg) <= SAME_BG)
         .or(valid.first())
         .map(|(r, _)| *r)
+        .or_else(|| band(&img, cx, cy, main_bg))
+}
+
+/// A picture as wide as the area, which has no side edges: a viewer fits a
+/// wide screenshot to its width (Teams). Its top and bottom are the nearest
+/// rows above and below the cursor whose edge with the row beyond runs
+/// unbroken through the cursor's column across most of the width (a window
+/// over part of the viewer cuts it short), with the backdrop (the area's
+/// main color) beyond.
+fn band(img: &Img, cx: usize, cy: usize, backdrop: Rgb) -> Option<Rect> {
+    let (w, h) = (img.w, img.h);
+    // The edge between rows `outside` and `inside`, through column cx,
+    // allowing short breaks (text touching the edge, antialiasing).
+    let run = |outside: usize, inside: usize| -> Option<(usize, usize)> {
+        let edge = |x: usize| img.edge_h(x, outside, inside);
+        let reach = |xs: &mut dyn Iterator<Item = usize>| {
+            let (mut last, mut gap) = (cx, 0);
+            for x in xs {
+                if edge(x) {
+                    (last, gap) = (x, 0);
+                } else {
+                    gap += 1;
+                    if gap > GAP * 2 {
+                        break;
+                    }
+                }
+            }
+            last
+        };
+        let (l, r) = (reach(&mut (0..cx).rev()), reach(&mut (cx..w)));
+        let long = (r - l) * 10 >= w * 6;
+        (long && diff(Img::mean(img.row(outside, l, r + 1)).0, backdrop) <= SAME_BG).then_some((l, r + 1))
+    };
+    let (top, (tl, tr)) = (2..=cy).rev().find_map(|y| run(y - 2, y).map(|s| (y - 1, s)))?;
+    let (bottom, (bl, br)) = (cy..h - 2).find_map(|y| run(y + 2, y).map(|s| (y + 2, s)))?;
+    let (left, right) = (tl.max(bl), tr.min(br));
+    let ih = bottom - top;
+    debug(&format!("band {left},{top} - {right},{bottom}"));
+    (ih >= MIN_SIDE && ih * 100 <= h * 95 && left <= cx && cx < right).then_some((left, top, right, bottom))
 }
 
 type Rect = (usize, usize, usize, usize);
@@ -374,6 +413,30 @@ mod tests {
         }
         let r = c.find(600, 500).expect("viewer image not found");
         assert!(near(r, (250, 180, 1350, 900)), "{r:?}");
+    }
+
+    #[test]
+    fn finds_screenshot_as_wide_as_the_viewer() {
+        // Teams' photo viewer: a wide screenshot fitted to the viewer's width
+        // on a dimmed chat (dark, with faint text). No side edges; the
+        // screenshot has full-width lines of its own (a header border).
+        let mut c = Canvas::new(1500, 800, [36, 36, 36]);
+        for line in 0..20 {
+            let y = 20 + line * 38;
+            c.rect(100, y, 600, y + 10, |x, _| if (x / 5) % 3 == 0 { [52, 52, 52] } else { [36, 36, 36] });
+        }
+        c.rect(0, 260, 1500, 460, |_, _| [250, 250, 250]);
+        c.rect(0, 318, 1500, 320, |_, _| [200, 200, 200]);
+        c.rect(0, 400, 1500, 460, |_, _| [235, 235, 235]);
+        for x in (60..1400).step_by(180) {
+            c.rect(x, 280, x + 120, 300, |_, _| [40, 40, 40]);
+        }
+        let r = c.find(300, 290).expect("wide screenshot not found");
+        assert!(near(r, (0, 260, 1500, 460)), "{r:?}");
+        // A window over the viewer's right part cuts the screenshot short.
+        c.rect(1150, 0, 1500, 800, |_, _| [30, 30, 30]);
+        let r = c.find(300, 290).expect("partly covered screenshot not found");
+        assert!(near(r, (0, 260, 1150, 460)), "{r:?}");
     }
 
     #[test]

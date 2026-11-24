@@ -7,6 +7,21 @@ and QuickCopy uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Pictures in Teams' photo viewer were not found: Teams reports the chat
+  behind the viewer under the cursor. When one was found, the chat around
+  it was read too.
+- Paused TikTok videos were not read: TikTok lays a layer over the video,
+  and the video is not in the accessibility tree.
+- An animated picture (a GIF in an email) took the overlay away each time
+  it changed frame, which ended a drag and the copy. The overlay now shows
+  the frame it read, like a paused video, until the cursor leaves.
+- A spinner or another small animation in a picture, or a window over a
+  corner of it, kept the picture from being read.
+- A picture as wide as its viewer (a wide screenshot) was not found from
+  pixels, as it has no left and right edges.
+
 ## [0.1.2] - 2026-11-24
 
 ### Fixed

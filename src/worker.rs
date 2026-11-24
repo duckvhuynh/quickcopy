@@ -34,6 +34,9 @@ pub const WM_APP_HIDE: u32 = WM_APP + 2;
 pub const WM_APP_UPDATE: u32 = WM_APP + 3; // lparam = Box<OcrData>
 /// A video under the cursor is playing (lparam = Box<RECT>, its screen rect).
 pub const WM_APP_PLAYING: u32 = WM_APP + 5;
+/// The picture under the overlay changed in place (an animated GIF): the
+/// overlay can keep the frame it read (`OcrData::frame`) while text is selected.
+pub const WM_APP_CHANGED: u32 = WM_APP + 6;
 /// Checks in a row (`REVALIDATE` apart, in main) that must see a shown
 /// video's picture move before it counts as playing again.
 const PLAYING_CHECKS: u8 = 3;
@@ -46,6 +49,10 @@ const VIDEO_FRAME: Duration = Duration::from_millis(150);
 /// How long an image may keep changing (opening animation) before we give up.
 const SETTLE_TIMEOUT: Duration = Duration::from_millis(1200);
 const SETTLE_STEP: Duration = Duration::from_millis(40);
+/// Percent of the settle grid that may still move (see `stable_capture`).
+const SETTLE_SPOT: usize = 4;
+/// Percent of a paused video's grid that may still move (see `paused_frame`).
+const PAUSED_SPOT: usize = 2;
 /// Time a Chromium window gets to build its accessibility tree on first contact.
 /// Edge needed ~380 ms; Electron apps with accessibility off never get one.
 const TREE_WAIT: Duration = Duration::from_millis(1000);
@@ -74,12 +81,24 @@ pub struct OcrData {
     pub pending: bool,
     /// A paused video's frame, not an image (see `textmodel::grab_areas`).
     pub video: bool,
+    /// The pixels that were read (BGRA, `rect`'s size), drawn by the overlay
+    /// when the picture goes on to change while text is selected.
+    pub frame: std::sync::Arc<Vec<u8>>,
 }
 
 impl OcrData {
-    fn new(rect: RECT, words: Vec<Word>, id: u64, pending: bool, video: bool) -> Self {
-        Self { rect, lines: line_rects(&words), words, id, pending, video }
+    fn new(rect: RECT, words: Vec<Word>, id: u64, pending: bool, video: bool, frame: std::sync::Arc<Vec<u8>>) -> Self {
+        Self { rect, lines: line_rects(&words), words, id, pending, video, frame }
     }
+}
+
+/// What a revalidation found.
+enum Check {
+    Valid,
+    /// Moved, gone, playing, or (found from pixels) scrolled: the overlay goes.
+    Moved,
+    /// Changed in place (an animation): see `WM_APP_CHANGED`.
+    Changed,
 }
 
 /// Which result `detect` is reporting.
@@ -113,6 +132,8 @@ struct Current {
     /// The look at the last check, and how many checks in a row saw motion.
     last_grid: Vec<[u8; 3]>,
     moving: u8,
+    /// Set by `still_valid` when the picture changed but not its place.
+    changed_in_place: bool,
 }
 
 /// What `detect` found under a point.
@@ -211,6 +232,23 @@ impl Detector {
                 }
             }
         }
+        // A photo viewer open over a web app can be left out of hit testing:
+        // Teams' viewer answers with the chat behind it (a tree item, a
+        // heading). The cursor tells: over that text the page would show an
+        // I-beam. Pixels show a picture there, and the viewer is still in the
+        // tree, as an image as big as the window: searching the tree is slow
+        // (150 ms in Teams), so it runs only when both of those hold.
+        let behind = [UIA_TextControlTypeId, UIA_TreeItemControlTypeId, UIA_ListItemControlTypeId, UIA_DataItemControlTypeId].contains(&control_type);
+        if behind
+            && is_web(&element)
+            && !(from_cursor && !self.ignore_cursor && cursor_is_ibeam())
+            && image_from_pixels(pt)?.is_some()
+            && let Some(cover) = self.covering_image(pt)?
+        {
+            log(format!("an image covers the page at {},{} (control type {} under it)", pt.x, pt.y, control_type.0));
+            element = cover;
+            control_type = UIA_ImageControlTypeId;
+        }
         // A <video> is a group like any <div>; the tag says which.
         let video = if control_type == UIA_GroupControlTypeId { crate::video::video_at(pt) } else { None };
         let mut media = video.map(|_| Media::Tab(unsafe { GetAncestor(WindowFromPoint(pt), GA_ROOT) }));
@@ -229,6 +267,20 @@ impl Detector {
         } else {
             None
         };
+        // A video under a layer that UI Automation reports in its place, when
+        // the <video> is not in the tree at all: TikTok lays a region named
+        // "Watch in full screen" over the whole card, and only the video's
+        // poster image is in the tree, in the video's place. It is read as
+        // a video: once its picture stops moving.
+        let layered = if video.is_none() && wrapped.is_none() && control_type == UIA_GroupControlTypeId && is_web(&element) {
+            self.image_inside(&element, pt)?
+        } else {
+            None
+        };
+        if layered.is_some() {
+            may_play = true;
+        }
+        let wrapped = wrapped.or(layered);
         let (clip, tracked) = if control_type == UIA_ImageControlTypeId || video.is_some() || wrapped.is_some() {
             let element_rect = unsafe { element.CurrentBoundingRectangle()? };
             // The element UI Automation found may be a box around the video
@@ -238,9 +290,20 @@ impl Detector {
                 Some(rect) if rect != element_rect => (rect, None),
                 _ => (element_rect, Some(element.clone())),
             };
-            let Some(clip) = visible_rect(pt, element_rect) else {
+            let Some(mut clip) = visible_rect(pt, element_rect) else {
                 return Ok(Found::Nothing);
             };
+            // A photo viewer can report its whole stage as the picture
+            // (Teams: a role="img" box over the dimmed chat), and reading all
+            // of it picks up the chat behind. The photo is the picture found
+            // from pixels inside it, when that is clearly smaller.
+            if video.is_none()
+                && covers_window(clip, pt)
+                && let Some(photo) = picture_in(clip, pt)?
+            {
+                log(format!("picture {}x{} inside a {}x{} image element", photo.right - photo.left, photo.bottom - photo.top, clip.right - clip.left, clip.bottom - clip.top));
+                clip = photo;
+            }
             (clip, tracked.map(|e| (e, element_rect)))
         } else if control_type == UIA_PaneControlTypeId && self.is_chromium_without_tree(pt, &element) {
             // Electron app with accessibility turned off (e.g. Zalo): find the image from pixels.
@@ -303,7 +366,7 @@ impl Detector {
             // Not seen before. An image still animating in (viewer zoom, fade)
             // would be read half-drawn, so wait until two captures agree.
             // Cache hits skip this: they matched an image that had settled.
-            let Some(settled) = stable_capture(clip, hash)? else {
+            let Some(settled) = stable_capture(clip, &pixels)? else {
                 log("image never settled".into());
                 return Ok(Found::Nothing);
             };
@@ -311,13 +374,14 @@ impl Detector {
         }
         let key = hash ^ mode;
         let look = grid(&pixels, w, h);
-        let current = Current { element: tracked, clip, last_grid: look.clone(), grid: look, media, may_play, moving: 0 };
+        let frame = std::sync::Arc::new(pixels.clone());
+        let current = Current { element: tracked, clip, last_grid: look.clone(), grid: look, media, may_play, moving: 0, changed_in_place: false };
         let t_found = t0.elapsed();
 
         if let Some(words) = self.cache.get(&key) {
             log(format!("cache hit {w}x{h} in {:?}", t0.elapsed()));
             if !words.is_empty() {
-                report(Stage::Show, OcrData::new(clip, words.clone(), key, false, is_video));
+                report(Stage::Show, OcrData::new(clip, words.clone(), key, false, is_video, frame));
             }
             return Ok(Found::Image(current));
         }
@@ -345,7 +409,7 @@ impl Detector {
         }
         // The Windows OCR words go out without waiting for the model.
         let vietnamese = VIETNAMESE.load(Ordering::Relaxed) && !self.viet_failed;
-        report(Stage::Show, OcrData::new(clip, first.clone(), key, vietnamese, is_video));
+        report(Stage::Show, OcrData::new(clip, first.clone(), key, vietnamese, is_video, frame.clone()));
         self.finish_loading(loading);
 
         let words = if vietnamese {
@@ -356,7 +420,7 @@ impl Detector {
                 None => first,
             };
             log(format!("vietnamese ready in {:?}", t0.elapsed()));
-            report(Stage::Update, OcrData::new(clip, words.clone(), key, false, is_video));
+            report(Stage::Update, OcrData::new(clip, words.clone(), key, false, is_video, frame));
             words
         } else {
             first
@@ -376,8 +440,11 @@ impl Detector {
         std::thread::sleep(VIDEO_FRAME);
         let (w, h) = (clip.right - clip.left, clip.bottom - clip.top);
         let second = capture(clip, w, h)?;
-        if second != first {
-            log("video playing (picture moves)".into());
+        // A spot of motion is not the video: a spinner or a window's
+        // animation over a corner of it. A playing video moves more.
+        let changed = grid(first, w, h).iter().zip(&grid(&second, w, h)).filter(|(a, b)| a != b).count();
+        if changed * 100 > 256 * PAUSED_SPOT {
+            log(format!("video playing (picture moves, {changed} cells)"));
             return Ok(None);
         }
         Ok(Some(second))
@@ -484,13 +551,61 @@ impl Detector {
                 // that are named are labelled regions or figures.
                 let page = control_type == UIA_DocumentControlTypeId;
                 let unnamed_box = [UIA_GroupControlTypeId, UIA_PaneControlTypeId].contains(&control_type) && unsafe { element.CurrentName()? }.is_empty();
-                if !page && !unnamed_box {
+                // A box as big as the picture is a layer over it, not content
+                // beside it: TikTok lays a region named "Watch in full
+                // screen" over its videos.
+                let layer = [UIA_GroupControlTypeId, UIA_PaneControlTypeId].contains(&control_type)
+                    && unsafe { element.CurrentBoundingRectangle() }.ok().and_then(|r| intersect(r, area)).is_some_and(|i| {
+                        let size = |r: RECT| (r.right - r.left) as i64 * (r.bottom - r.top) as i64;
+                        size(i) * 10 >= size(area) * 8
+                    });
+                if !page && !unnamed_box && !layer {
                     log(format!("web page: its own content at {},{} (control type {})", pt.x, pt.y, control_type.0));
                     return Ok(true);
                 }
             }
         }
         Ok(false)
+    }
+
+    /// The rect of the last image inside `element` that holds `pt` and is big
+    /// enough to be a picture (see `layered` in `detect`).
+    fn image_inside(&self, element: &IUIAutomationElement, pt: POINT) -> Result<Option<RECT>> {
+        let condition = unsafe { self.uia.CreatePropertyCondition(UIA_ControlTypePropertyId, &VARIANT::from(UIA_ImageControlTypeId.0))? };
+        let Ok(images) = (unsafe { element.FindAll(TreeScope_Descendants, &condition) }) else {
+            return Ok(None);
+        };
+        let mut found = None;
+        for i in 0..unsafe { images.Length()? } {
+            let Ok(r) = (unsafe { images.GetElement(i)?.CurrentBoundingRectangle() }) else { continue };
+            if (r.left..r.right).contains(&pt.x) && (r.top..r.bottom).contains(&pt.y) && r.right - r.left >= SURFACE_MIN_W && r.bottom - r.top >= SURFACE_MIN_H {
+                found = Some(r);
+            }
+        }
+        Ok(found)
+    }
+
+    /// The last image in the tree of the window under `pt` that holds `pt`
+    /// and covers most of the window: a photo viewer open over the page.
+    /// Walks the whole tree (about 150 ms in Teams).
+    fn covering_image(&self, pt: POINT) -> Result<Option<IUIAutomationElement>> {
+        let root = unsafe { GetAncestor(WindowFromPoint(pt), GA_ROOT) };
+        let Ok(window) = (unsafe { self.uia.ElementFromHandle(root) }) else {
+            return Ok(None);
+        };
+        let condition = unsafe { self.uia.CreatePropertyCondition(UIA_ControlTypePropertyId, &VARIANT::from(UIA_ImageControlTypeId.0))? };
+        let Ok(images) = (unsafe { window.FindAll(TreeScope_Descendants, &condition) }) else {
+            return Ok(None);
+        };
+        let mut found = None;
+        for i in 0..unsafe { images.Length()? } {
+            let image = unsafe { images.GetElement(i)? };
+            let Ok(r) = (unsafe { image.CurrentBoundingRectangle() }) else { continue };
+            if (r.left..r.right).contains(&pt.x) && (r.top..r.bottom).contains(&pt.y) && covers_window(r, pt) {
+                found = Some(image);
+            }
+        }
+        Ok(found)
     }
 
     /// A Chromium/Electron content window whose accessibility tree is empty.
@@ -657,6 +772,22 @@ impl Detector {
         lines
     }
 
+    /// Whether the image the overlay covers is still where it was and
+    /// unchanged (and, for a video, still paused).
+    fn check(&self, cur: &mut Current) -> Check {
+        match self.still_valid(cur) {
+            true => Check::Valid,
+            // A picture with its own element that has not moved, and is not
+            // a video, changed in place: an animated image. The next check
+            // compares with the new look.
+            false if cur.changed_in_place => {
+                cur.changed_in_place = false;
+                Check::Changed
+            }
+            false => Check::Moved,
+        }
+    }
+
     /// True if the image the overlay covers is still where it was and unchanged
     /// (and, for a video, still paused).
     fn still_valid(&self, cur: &mut Current) -> bool {
@@ -684,9 +815,17 @@ impl Detector {
         let now = grid(&px, w, h);
         let differ = |a: &[u8; 3], b: &[u8; 3]| (0..3).map(|i| (a[i] as i32 - b[i] as i32).abs()).sum::<i32>() > 24;
         let changed = now.iter().zip(&cur.grid).filter(|(a, b)| differ(a, b)).count();
-        let same = changed * 100 <= cur.grid.len() * 15;
+        // Gmail darkens a picture under the cursor and puts buttons on it:
+        // every cell changes, but the light and dark parts stay where they
+        // were. Only for an element that has not moved: a picture found
+        // from pixels may have scrolled a little, which also keeps them.
+        let same = changed * 100 <= cur.grid.len() * 15 || (cur.element.is_some() && correlation(&now, &cur.grid) >= 0.9);
         if !same {
             log(format!("revalidate: image changed ({changed}/{} blocks)", cur.grid.len()));
+            if cur.element.is_some() && cur.media.is_none() && !cur.may_play {
+                cur.changed_in_place = true;
+                cur.grid = now;
+            }
             return false;
         }
         // A video playing again: its picture keeps moving, check after check
@@ -818,10 +957,17 @@ pub fn run(rx: Receiver<Request>, hwnd: isize) {
             }
         } else if revalidate {
             if let Some(cur) = &mut current {
-                if !detector.still_valid(cur) {
-                    current = None;
+                let msg = match detector.check(cur) {
+                    Check::Valid => None,
+                    Check::Changed => Some(WM_APP_CHANGED),
+                    Check::Moved => {
+                        current = None;
+                        Some(WM_APP_HIDE)
+                    }
+                };
+                if let Some(msg) = msg {
                     unsafe {
-                        let _ = PostMessageW(Some(hwnd), WM_APP_HIDE, WPARAM(0), LPARAM(0));
+                        let _ = PostMessageW(Some(hwnd), msg, WPARAM(0), LPARAM(0));
                     }
                 }
             }
@@ -993,6 +1139,27 @@ fn virtual_screen() -> RECT {
 }
 
 /// Captures the window under `pt` and looks for an image rectangle around it.
+/// Whether `r` covers most of the window under `pt`.
+fn covers_window(r: RECT, pt: POINT) -> bool {
+    let mut wr = RECT::default();
+    if unsafe { GetWindowRect(WindowFromPoint(pt), &mut wr) }.is_err() {
+        return false;
+    }
+    let area = |r: RECT| (r.right - r.left).max(0) as i64 * (r.bottom - r.top).max(0) as i64;
+    intersect(r, wr).is_some_and(|i| area(i) * 2 >= area(wr))
+}
+
+/// The picture under `pt` found from pixels inside `area`, if it is clearly
+/// smaller than `area` (at most 80% of it).
+fn picture_in(area: RECT, pt: POINT) -> Result<Option<RECT>> {
+    let (w, h) = (area.right - area.left, area.bottom - area.top);
+    let px = capture(area, w, h)?;
+    let found = crate::rectfind::find_image_rect(&px, w as usize, h as usize, (pt.x - area.left) as usize, (pt.y - area.top) as usize);
+    Ok(found
+        .filter(|&(l, t, r, b)| ((r - l) * (b - t)) as i64 * 10 <= w as i64 * h as i64 * 8)
+        .map(|(l, t, r, b)| RECT { left: area.left + l as i32, top: area.top + t as i32, right: area.left + r as i32, bottom: area.top + b as i32 }))
+}
+
 fn image_from_pixels(pt: POINT) -> Result<Option<RECT>> {
     let t0 = Instant::now();
     let mut wr = RECT::default();
@@ -1384,19 +1551,30 @@ pub fn capture(r: RECT, out_w: i32, out_h: i32) -> Result<Vec<u8>> {
     }
 }
 
-/// The capture of `clip`, with its hash, once two captures in a row agree
-/// (starting from the hash of a capture just taken), or `None` if it is
-/// still changing after `SETTLE_TIMEOUT`.
-fn stable_capture(clip: RECT, first: u64) -> Result<Option<(u64, Vec<u8>)>> {
+/// The capture of `clip`, with its hash, once three captures in a row agree
+/// (starting from `first`, a capture just taken), or `None` if it is still
+/// changing after `SETTLE_TIMEOUT`. Captures agree when at most
+/// `SETTLE_SPOT` of the 16x16 grid's cells differ: a spinner, a caret or a
+/// small GIF in the area keeps moving, while a viewer zooming or fading an
+/// image in changes most of it.
+fn stable_capture(clip: RECT, first: &[u8]) -> Result<Option<(u64, Vec<u8>)>> {
     let (w, h) = (clip.right - clip.left, clip.bottom - clip.top);
     let start = Instant::now();
-    let mut prev = first;
+    let mut prev = grid(first, w, h);
+    // Three captures in a row: a GIF's crossfade holds each blended frame
+    // for a moment, which two captures can mistake for a settled picture.
+    let mut agreed = 0;
     loop {
         std::thread::sleep(SETTLE_STEP);
         let pixels = capture(clip, w, h)?;
-        let next = hash_pixels(&pixels, w, h);
-        if next == prev {
-            return Ok(Some((next, pixels)));
+        let next = grid(&pixels, w, h);
+        let changed = next.iter().zip(&prev).filter(|(a, b)| (0..3).any(|i| a[i] != b[i])).count();
+        agreed = if changed * 100 <= next.len() * SETTLE_SPOT { agreed + 1 } else { 0 };
+        if agreed >= 2 {
+            if changed > 0 {
+                log(format!("settled with {changed} cells still moving"));
+            }
+            return Ok(Some((hash_pixels(&pixels, w, h), pixels)));
         }
         if start.elapsed() >= SETTLE_TIMEOUT {
             return Ok(None);
@@ -1420,6 +1598,23 @@ fn to_words(lines: &[Vec<(Box4, String)>], scale: f32) -> Vec<Word> {
         }
     }
     words
+}
+
+/// Pearson correlation of the cells' brightness in two grids: near 1 when
+/// one is the other tinted or dimmed, low when the picture changed or moved.
+/// 0 when either grid is flat.
+fn correlation(a: &[[u8; 3]], b: &[[u8; 3]]) -> f64 {
+    let luma = |c: &[u8; 3]| c[0] as f64 * 0.3 + c[1] as f64 * 0.59 + c[2] as f64 * 0.11;
+    let (xs, ys): (Vec<f64>, Vec<f64>) = a.iter().zip(b).map(|(p, q)| (luma(p), luma(q))).unzip();
+    let n = xs.len().max(1) as f64;
+    let (mx, my) = (xs.iter().sum::<f64>() / n, ys.iter().sum::<f64>() / n);
+    let (mut sxy, mut sxx, mut syy) = (0.0, 0.0, 0.0);
+    for (x, y) in xs.iter().zip(&ys) {
+        sxy += (x - mx) * (y - my);
+        sxx += (x - mx) * (x - mx);
+        syy += (y - my) * (y - my);
+    }
+    if sxx < 1.0 || syy < 1.0 { 0.0 } else { sxy / (sxx * syy).sqrt() }
 }
 
 /// Mean color of each cell of a 16x16 grid over a BGRA capture.
