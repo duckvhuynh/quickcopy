@@ -1,0 +1,7 @@
+# Template: docs/release.md fills 0.1.4 and 1DA3EEEC5E05439E8FD4572F179A42A733A153CA336EF05588EB6A2375A0C084.
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.28.0.schema.json
+PackageIdentifier: duckvhuynh.QuickCopy
+PackageVersion: 0.1.4
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.28.0
