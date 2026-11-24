@@ -140,6 +140,9 @@ struct App {
     anchor: usize,
     focus: usize,
     dragging: bool,
+    /// Where the button went down on a surface (overlay coordinates): a
+    /// drag from there selects, a click goes to the app (`pass_click`).
+    pressed: Option<POINT>,
     /// The overlay has keyboard focus (only while something is selected).
     active: bool,
     /// Our right-click menu is open over the image.
@@ -169,6 +172,10 @@ struct App {
 impl App {
     fn has_selection(&self) -> bool {
         self.anchor != self.focus
+    }
+
+    fn on_surface(&self) -> bool {
+        self.data.as_ref().is_some_and(|d| d.kind == Kind::Surface)
     }
 }
 
@@ -397,6 +404,7 @@ fn main() -> Result<()> {
                 anchor: 0,
                 focus: 0,
                 dragging: false,
+                pressed: None,
                 active: false,
                 menu_open: false,
                 stale: false,
@@ -502,7 +510,7 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             // The image moved or changed under the overlay. The worker has
             // let it go, so a hide put off now must still happen.
             with_app(|app| {
-                if app.dragging || app.menu_open {
+                if app.dragging || app.pressed.is_some() || app.menu_open {
                     app.stale = true;
                 } else {
                     hide_stale(app);
@@ -611,7 +619,7 @@ fn tick(app: &mut App) {
         return;
     }
     let button_down = unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } < 0;
-    if app.paused || app.data.is_some() || button_down || now - app.still_since < DWELL {
+    if app.paused || app.data.is_some() || button_down || now.saturating_duration_since(app.still_since) < DWELL {
         return;
     }
     // Ask once when the cursor settles, then a couple more times while it
@@ -681,6 +689,7 @@ fn hide(app: &mut App) {
     app.focus = 0;
     app.pending_copy = false;
     app.dragging = false;
+    app.pressed = None;
     app.flashing = false;
     app.translating = false;
     app.translation = None;
@@ -939,6 +948,19 @@ fn on_button_down(app: &mut App, pt: POINT) {
     if app.model.is_none() {
         return;
     }
+    // On a surface the press may be meant for the app (a button or a link
+    // it draws): it selects only once it drags.
+    if app.on_surface() {
+        app.pressed = Some(pt);
+        unsafe {
+            SetCapture(app.overlay);
+        }
+        return;
+    }
+    start_selection(app, pt);
+}
+
+fn start_selection(app: &mut App, pt: POINT) {
     activate(app);
     app.popover.hide();
     // A new selection starts from the original text, and no longer waits
@@ -975,6 +997,14 @@ fn on_button_down(app: &mut App, pt: POINT) {
 }
 
 fn on_mouse_move(app: &mut App, pt: POINT) {
+    if let Some(from) = app.pressed {
+        let (dx, dy) = unsafe { (GetSystemMetrics(SM_CXDRAG), GetSystemMetrics(SM_CYDRAG)) };
+        if (pt.x - from.x).abs() <= dx && (pt.y - from.y).abs() <= dy {
+            return;
+        }
+        app.pressed = None;
+        start_selection(app, from);
+    }
     if !app.dragging {
         return;
     }
@@ -987,6 +1017,13 @@ fn on_mouse_move(app: &mut App, pt: POINT) {
 }
 
 fn on_button_up(app: &mut App) {
+    if let Some(at) = app.pressed.take() {
+        unsafe {
+            let _ = ReleaseCapture();
+        }
+        pass_click(app, at);
+        return;
+    }
     if !app.dragging {
         return;
     }
@@ -1009,7 +1046,29 @@ fn hide_stale(app: &mut App) {
     app.requested = false;
 }
 
+/// Hands a click on a surface's text to the app: the overlay goes and the
+/// click is played again where it was pressed. Reading again waits for a
+/// double-click's time, so the second click of one reaches the app too.
+fn pass_click(app: &mut App, at: POINT) {
+    let Some(rect) = app.data.as_ref().map(|d| d.rect) else { return };
+    let pt = POINT { x: rect.left + at.x, y: rect.top + at.y };
+    hide(app);
+    let _ = app.tx.send(Request::Forget);
+    app.last_pos = pt;
+    app.still_since = Instant::now() + Duration::from_millis(unsafe { GetDoubleClickTime() } as u64);
+    app.requested = false;
+    unsafe {
+        let _ = SetCursorPos(pt.x, pt.y);
+    }
+    send_mouse(MOUSEEVENTF_LEFTDOWN, 0);
+    send_mouse(MOUSEEVENTF_LEFTUP, 0);
+}
+
 fn on_double_click(app: &mut App, pt: POINT) {
+    // Word selection is for pictures; on a surface it is another press.
+    if app.on_surface() {
+        return on_button_down(app, pt);
+    }
     let Some(model) = &app.model else { return };
     let (s, e) = model.word_at(model.hit(pt));
     (app.anchor, app.focus) = (s, e);
