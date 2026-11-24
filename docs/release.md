@@ -7,12 +7,14 @@ Each release has three assets:
 
 | Asset | What it is |
 | --- | --- |
-| `QuickCopy-X.Y.Z-windows-x64.zip` | Folder `QuickCopy/` with `quickcopy.exe`, `models/viesvtr/vi_syllables.bin`, `README.md` and the license files |
+| `QuickCopy-X.Y.Z-windows-x64.zip` | Folder `QuickCopy/` with `quickcopy.exe`, `models/viesvtr/vi_syllables.bin`, `README.txt` (the short user guide in `packaging/README.txt`) and the license files |
 | `quickcopy-X.Y.Z-windows-x64.exe` | The bare exe, which the in-app updater downloads |
 | `SHA256SUMS.txt` | One `<sha256>  <asset name>` line per asset |
 
 The VieSVTR model (`viesvtr_v7.onnx`) is never shipped. It is licensed
-CC BY-NC 4.0, so users download it themselves as the README describes.
+CC BY-NC 4.0, so QuickCopy downloads it at its first start from its
+author's Hugging Face page, at the revision and SHA-256 pinned in
+`src/model.rs`. `README.txt` in the zip names the model and its license.
 
 ## Cut a release
 

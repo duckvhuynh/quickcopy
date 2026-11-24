@@ -18,8 +18,8 @@ const HEIGHT: usize = 64;
 const W_STRIDE: usize = 4;
 const W_MIN: usize = 32;
 const W_MAX: usize = 1600;
-const MODEL_FILE: &str = "models/viesvtr/viesvtr_v7.onnx";
-/// Next to the model: syllable frequencies that pick tone marks (`lm.rs`).
+pub const MODEL_FILE: &str = "viesvtr_v7.onnx";
+/// Syllable frequencies that pick tone marks (`lm.rs`); in the release zip.
 const SYLLABLES_FILE: &str = "vi_syllables.bin";
 /// A letter with other marks is tried when the model gave it at most this
 /// much less (nats) than its first choice; at most this many per letter.
@@ -87,7 +87,9 @@ impl Recognizer {
             .commit_from_file(path)
             .map_err(|e| err(&e))?;
         // Without the table lines are read as the model reads them.
-        let syllables = lm::Lm::load(&path.with_file_name(SYLLABLES_FILE))
+        let syllables = find(SYLLABLES_FILE)
+            .ok_or_else(|| format!("{SYLLABLES_FILE} not found"))
+            .and_then(|p| lm::Lm::load(&p))
             .map_err(|e| crate::common::log(format!("Vietnamese tone marks as read: {e}")))
             .ok();
         Ok(Self { session, vocab: VOCAB.chars().collect(), syllables })
@@ -208,11 +210,27 @@ pub struct Line<'a> {
     pub h: usize,
 }
 
-/// Looks for the model next to the executable, then in its parent folders
-/// (so `target/release/quickcopy.exe` finds the project's `models/`).
-pub fn model_path() -> Option<PathBuf> {
+/// Where the settings window downloads the model to:
+/// `%LOCALAPPDATA%\QuickCopy\models\viesvtr\` (`model.rs`).
+pub fn download_dir() -> Option<PathBuf> {
+    Some(model_dir(&PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("QuickCopy")))
+}
+
+fn model_dir(base: &Path) -> PathBuf {
+    base.join("models").join("viesvtr")
+}
+
+/// `models/viesvtr/<name>` in the download folder, then next to the
+/// executable and in its parent folders (so `target/release/quickcopy.exe`
+/// finds the project's `models/`).
+fn find(name: &str) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    exe.ancestors().skip(1).take(4).map(|dir| dir.join(MODEL_FILE)).find(|p| p.is_file())
+    let beside = exe.ancestors().skip(1).take(4).map(model_dir);
+    download_dir().into_iter().chain(beside).map(|dir| dir.join(name)).find(|p| p.is_file())
+}
+
+pub fn model_path() -> Option<PathBuf> {
+    find(MODEL_FILE)
 }
 
 /// ONNX Runtime: a copy next to the exe wins, else the one Windows 11 ships.

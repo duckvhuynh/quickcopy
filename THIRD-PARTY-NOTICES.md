@@ -14,8 +14,10 @@ whether it is in this repository or in a release.
   (CC BY-NC 4.0), <https://creativecommons.org/licenses/by-nc/4.0/>.
 
 The model is not in this repository and not in any QuickCopy release. Users
-who want Vietnamese text recognition download it themselves from the page
-above and accept its license. CC BY-NC 4.0 does not allow commercial use, so
+get it from the page above: QuickCopy downloads the file from there at its
+first start, checks its SHA-256 hash, and names the model and its license
+in the README of the release zip. Turning off Vietnamese text recognition
+stops the download. CC BY-NC 4.0 does not allow commercial use, so
 a commercial use of QuickCopy's Vietnamese mode needs the model author's
 permission. QuickCopy works without the model, with Windows OCR only.
 

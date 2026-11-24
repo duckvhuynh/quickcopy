@@ -192,7 +192,7 @@ fn listed_hash(sums: &str, name: &str) -> Option<[u8; 32]> {
     })
 }
 
-fn sha256(data: &[u8]) -> [u8; 32] {
+pub(crate) fn sha256(data: &[u8]) -> [u8; 32] {
     let mut out = [0u8; 32];
     let status = unsafe { BCryptHash(BCRYPT_SHA256_ALG_HANDLE, None, data, &mut out) };
     assert!(status.is_ok(), "BCryptHash: {status:?}");
@@ -206,7 +206,7 @@ fn verify(data: &[u8], sums: &str, name: &str) -> Result<(), String> {
     if got == want { Ok(()) } else { Err(format!("{name}: SHA-256 {} but {SUMS} lists {}", hex(&got), hex(&want))) }
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 

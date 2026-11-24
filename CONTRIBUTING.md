@@ -32,8 +32,8 @@ cargo build --release
 
 The executable is `target\release\quickcopy.exe`. To work on Vietnamese
 text recognition, put the VieSVTR model at
-`models\viesvtr\viesvtr_v7.onnx`, as the
-[README](README.md#vietnamese-text-recognition-optional) describes.
+`models\viesvtr\viesvtr_v7.onnx` in the repository, or get it with
+`target\release\quickcopy.exe --download-model`.
 
 ## Test
 

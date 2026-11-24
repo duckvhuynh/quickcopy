@@ -177,6 +177,7 @@ Run the benchmarks with
 | `src/rectfind.rs` | Finding an image rectangle from pixels |
 | `src/missed.rs` | Reading lines that Windows OCR skipped |
 | `src/viet.rs`, `src/viet/lm.rs` | VieSVTR and tone-mark picking |
+| `src/model.rs` | Downloading the VieSVTR model from the settings |
 | `src/textmodel.rs` | Blocks, carets and selection |
 | `src/translate.rs`, `src/layout.rs`, `src/style.rs` | Translation and its layout |
 | `src/paint.rs`, `src/theme.rs` | Direct2D drawing and colors |

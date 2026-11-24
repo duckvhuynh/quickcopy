@@ -18,9 +18,11 @@ The first public release.
   tree, such as Zalo.
 - Text recognition with Windows OCR. Lines that Windows OCR skips in
   tightly stacked text are cut out and read again.
-- Vietnamese text recognition with the optional VieSVTR model. Uncertain
-  tone marks are picked by syllable frequencies counted from Vietnamese
-  Wikipedia (`models/viesvtr/vi_syllables.bin`).
+- Vietnamese text recognition with the VieSVTR model (CC BY-NC 4.0),
+  which QuickCopy downloads from its author's page at the first start and
+  checks against a pinned SHA-256 hash. Uncertain tone marks are picked by
+  syllable frequencies counted from Vietnamese Wikipedia
+  (`models/viesvtr/vi_syllables.bin`).
 - Selection like native text: drag, double-click, triple-click,
   Shift+click, Shift+arrows, Ctrl+Shift+arrows, Shift+Home and Shift+End,
   and Ctrl+A. Copy with Ctrl+C, Ctrl+Insert or the selection menu.
@@ -39,7 +41,8 @@ The first public release.
   app icon.
 - Reading ahead: the image at the center of a window that comes to the
   front is read before the cursor gets there.
-- Debug flags `--ocr-file`, `--probe`, `--layout`, `--uia` and `--drag`.
+- Debug flags `--ocr-file`, `--probe`, `--layout`, `--uia` and `--drag`,
+  and `--check-update` and `--download-model`.
 - Test tools: an OCR corpus (`tools/corpus`), selection cases
   (`tools/selection`) and video cases (`tools/video`).
 - Update checker: once a day (and from **Check now** in the settings) it

@@ -13,6 +13,7 @@
 //!                             order, with the block each belongs to
 //!   quickcopy --check-update  print the latest release and its asset URLs
 //!                             (installs nothing; see update.rs)
+//!   quickcopy --download-model download the VieSVTR model (model.rs)
 //!
 //! Testing hooks: QC_UPDATE_API points the update check at another release
 //! JSON (update.rs); QC_INSTANCE=name runs an instance beside the installed
@@ -30,6 +31,7 @@ mod languages;
 mod layout;
 mod menu;
 mod missed;
+mod model;
 mod paint;
 mod popover;
 mod rectfind;
@@ -273,6 +275,12 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
+    if args.len() == 2 && args[1] == "--download-model" {
+        if !model::print_download() {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     let updated = args.iter().any(|a| a == "--updated");
     if updated {
         update::signal_started();
@@ -413,6 +421,12 @@ fn main() -> Result<()> {
             WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
         );
         update::start(main);
+        // The Vietnamese model is not in the release (CC BY-NC); get it at
+        // the first launch, and at the next one if that download failed,
+        // unless Vietnamese text recognition was turned off.
+        if settings::get().vietnamese_ocr && viet::model_path().is_none() && std::env::var_os("QC_ENGLISH").is_none() {
+            model::start(main);
+        }
         if updated {
             let version = update::Version::current().to_string();
             log(format!("running the update to {version}"));
@@ -485,6 +499,12 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         }
         update::WM_APP_UPDATE_STATUS => {
             on_update_status(hwnd);
+            LRESULT(0)
+        }
+        model::WM_APP_MODEL_STATUS => {
+            // A download finished turns the setting on (model.rs).
+            settings_ui::refresh();
+            worker::VIETNAMESE.store(vietnamese_wanted(), Ordering::Relaxed);
             LRESULT(0)
         }
         WM_COMMAND => {

@@ -3,7 +3,7 @@
     "description": "Select and copy text in any on-screen image",
     "homepage": "https://github.com/duckvhuynh/quickcopy",
     "license": "MIT|Apache-2.0",
-    "notes": "Vietnamese reading needs the VieSVTR model, downloaded separately into $dir\\models\\viesvtr (see the README).",
+    "notes": "QuickCopy downloads the VieSVTR model (CC BY-NC 4.0) for Vietnamese at its first start; see README.txt.",
     "architecture": {
         "64bit": {
             "url": "https://github.com/duckvhuynh/quickcopy/releases/download/v0.1.0/QuickCopy-0.1.0-windows-x64.zip",

@@ -36,6 +36,11 @@ pub fn open_session() -> Result<Handle> {
 
 /// Reads the whole response body of a request already received.
 pub fn read_body(request: &Handle) -> Result<Vec<u8>> {
+    read_body_with(request, &mut |_| {})
+}
+
+/// `read_body`, calling `progress` with the bytes read so far.
+fn read_body_with(request: &Handle, progress: &mut dyn FnMut(usize)) -> Result<Vec<u8>> {
     let mut body = Vec::new();
     unsafe {
         loop {
@@ -49,6 +54,7 @@ pub fn read_body(request: &Handle) -> Result<Vec<u8>> {
             let mut read = 0u32;
             WinHttpReadData(request.0, body[start..].as_mut_ptr() as *mut c_void, available, &mut read)?;
             body.truncate(start + read as usize);
+            progress(body.len());
         }
     }
     Ok(body)
@@ -87,6 +93,12 @@ fn parse_url(url: &str) -> Option<Url<'_>> {
 /// by default, never from https to http), so a GitHub asset URL arrives at
 /// its storage host. Any status comes back; only transport errors fail.
 pub fn get(url: &str, accept: &str) -> Result<Response> {
+    get_with(url, accept, &mut |_, _| {})
+}
+
+/// `get`, calling `progress(read, total)` as the body arrives; `total` is
+/// the Content-Length, 0 when the server sent none.
+pub fn get_with(url: &str, accept: &str, progress: &mut dyn FnMut(u64, u64)) -> Result<Response> {
     let u = parse_url(url).ok_or_else(|| Error::new(windows::Win32::Foundation::E_INVALIDARG, format!("bad URL: {url}")))?;
     unsafe {
         let session = open_session()?;
@@ -98,18 +110,26 @@ pub fn get(url: &str, accept: &str) -> Result<Response> {
         WinHttpAddRequestHeaders(request.0, &headers, WINHTTP_ADDREQ_FLAG_ADD)?;
         WinHttpSendRequest(request.0, None, None, 0, 0, 0)?;
         WinHttpReceiveResponse(request.0, std::ptr::null_mut())?;
-        let mut status = 0u32;
-        let mut size = size_of::<u32>() as u32;
+        let status = number_header(&request, WINHTTP_QUERY_STATUS_CODE)?;
+        let total = number_header(&request, WINHTTP_QUERY_CONTENT_LENGTH).unwrap_or(0) as u64;
+        Ok(Response { status, body: read_body_with(&request, &mut |read| progress(read as u64, total))? })
+    }
+}
+
+fn number_header(request: &Handle, query: u32) -> Result<u32> {
+    let mut value = 0u32;
+    let mut size = size_of::<u32>() as u32;
+    unsafe {
         WinHttpQueryHeaders(
             request.0,
-            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            query | WINHTTP_QUERY_FLAG_NUMBER,
             PCWSTR::null(),
-            Some((&mut status as *mut u32).cast()),
+            Some((&mut value as *mut u32).cast()),
             &mut size,
             std::ptr::null_mut(),
         )?;
-        Ok(Response { status, body: read_body(&request)? })
     }
+    Ok(value)
 }
 
 #[cfg(test)]

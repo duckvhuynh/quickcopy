@@ -7,13 +7,13 @@ dist/ is wiped and rebuilt on every run, so the same commit gives the same
 file list. Assets, for version X.Y.Z from Cargo.toml:
 
   QuickCopy-X.Y.Z-windows-x64.zip   QuickCopy/ with quickcopy.exe, the
-                                    Vietnamese tone-mark table, README and
+                                    Vietnamese tone-mark table, README.txt and
                                     license files
   quickcopy-X.Y.Z-windows-x64.exe   the bare exe (the in-app updater uses it)
   SHA256SUMS.txt                    "<sha256>  <asset name>" per asset
 
-The VieSVTR model (.onnx) is never packaged: it is CC BY-NC and users
-download it separately (see README).
+The VieSVTR model (.onnx) is never packaged: it is CC BY-NC, and the app
+downloads it at its first start (see packaging/README.txt).
 
 .PARAMETER NoBuild
 Package the existing target/release/quickcopy.exe instead of building. The
@@ -52,7 +52,8 @@ $entries = [ordered]@{
     'QuickCopy/quickcopy.exe'                    = $exe
     'QuickCopy/models/viesvtr/vi_syllables.bin' = $syllables
 }
-foreach ($doc in 'README.md', 'LICENSE-MIT', 'LICENSE-APACHE', 'THIRD-PARTY-NOTICES.md') {
+$entries['QuickCopy/README.txt'] = Join-Path $root 'packaging/README.txt'
+foreach ($doc in 'LICENSE-MIT', 'LICENSE-APACHE', 'THIRD-PARTY-NOTICES.md') {
     $path = Join-Path $root $doc
     if (Test-Path $path -PathType Leaf) { $entries["QuickCopy/$doc"] = $path }
 }

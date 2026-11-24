@@ -77,24 +77,30 @@ Release builds are not code-signed. The first time you run
 `quickcopy.exe`, Windows SmartScreen can show "Windows protected your PC".
 Verify the download first. Then select **More info** and **Run anyway**.
 
-### Vietnamese text recognition (optional)
+### Vietnamese text recognition
 
 Windows OCR has no Vietnamese recognizer. To read Vietnamese with its tone
 marks, QuickCopy uses the [VieSVTR](https://huggingface.co/ngocthua830/viesvtr)
-model. The model is not included in QuickCopy. Its license is
-**CC BY-NC 4.0, which allows non-commercial use only**.
+model by ngocthua830. The model is not in the release zip, because its
+license is **CC BY-NC 4.0, which allows non-commercial use only**.
 
-1. Download `weights/viesvtr_v7.onnx` (30.7 MB) from
-   <https://huggingface.co/ngocthua830/viesvtr>.
-2. Save it as `models\viesvtr\viesvtr_v7.onnx` in the folder that holds
-   `quickcopy.exe`, or in a parent folder of it.
-3. Put `vi_syllables.bin` in the same `models\viesvtr` folder. It is in
-   this repository at
-   [models/viesvtr/vi_syllables.bin](models/viesvtr/vi_syllables.bin).
-   Without it, tone marks are read as the model reads them.
-4. On Windows 10, also put `onnxruntime.dll` version 1.17 or newer next to
-   `quickcopy.exe`. Windows 11 already has a copy in `System32`.
-5. Turn on **Vietnamese text recognition** in the settings.
+The first time QuickCopy runs, it downloads the model (`viesvtr_v7.onnx`,
+30.7 MB) from that page, checks its SHA-256 hash and saves it to
+`%LOCALAPPDATA%\QuickCopy\models\viesvtr\`. The settings show the
+download's progress in percent. Without an internet connection it tries
+again at the next start, or when you select **Retry** in the settings.
+To stop using the model, turn off **Vietnamese text recognition** in the
+settings, then delete the file; QuickCopy does not download it again while
+the setting is off.
+
+On Windows 10, also put `onnxruntime.dll` version 1.17 or newer next to
+`quickcopy.exe`. Windows 11 already has a copy in `System32`.
+
+To install the model by hand instead, save `weights/viesvtr_v7.onnx` from
+the model's page as `models\viesvtr\viesvtr_v7.onnx` in that
+`%LOCALAPPDATA%\QuickCopy` folder or in the folder that holds
+`quickcopy.exe`. The release zip already has `vi_syllables.bin` in
+`models\viesvtr`; without it, tone marks are read as the model reads them.
 
 ## Usage
 
@@ -147,8 +153,11 @@ also opens the settings of the copy that is running.
 - **Translate into**: any of Google Translate's languages, with search.
 - **Translate shortcut**: Ctrl+T by default.
 - **App language**: English or Vietnamese.
-- **Vietnamese text recognition**: needs the VieSVTR model.
+- **Vietnamese text recognition**: on or off, once the VieSVTR model is
+  downloaded; until then, the download's progress.
 - **Check for updates automatically**: the daily update check.
+- **Version**: the running version, and a button that checks for updates
+  and shows the result, or offers **Update to X.Y.Z**.
 
 Settings are saved in `%APPDATA%\QuickCopy\settings.json`. The Start with
 Windows setting is stored only in the `HKCU` Run key.
@@ -182,6 +191,8 @@ prints what the check finds without installing anything.
   your own key.
 - The update check contacts `api.github.com` once a day. Turn off
   **Check for updates automatically** to stop it.
+- The first start contacts `huggingface.co` once, to download the
+  Vietnamese model.
 - QuickCopy sends nothing else and collects no usage data.
 
 ## Requirements
@@ -200,7 +211,7 @@ prints what the check finds without installing anything.
 - For Vietnamese only: the VieSVTR model and ONNX Runtime 1.17 or newer.
   Windows 11 ships ONNX Runtime in `System32`. On Windows 10, put
   `onnxruntime.dll` next to `quickcopy.exe`. See
-  [Vietnamese text recognition](#vietnamese-text-recognition-optional).
+  [Vietnamese text recognition](#vietnamese-text-recognition).
 
 ## Build from source
 
@@ -288,7 +299,7 @@ conditions.
 These parts have their own licenses:
 
 - The VieSVTR model is CC BY-NC 4.0. It is not in this repository or in
-  releases.
+  releases; QuickCopy downloads it from its author's page.
 - `models/viesvtr/vi_syllables.bin` is counted from Vietnamese Wikipedia
   and is licensed CC BY-SA 4.0.
 

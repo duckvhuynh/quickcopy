@@ -38,6 +38,7 @@ quickcopy --uia X Y                       # what UI Automation and IAccessible2 
 quickcopy --drag image.png X0 Y0 X1 Y1    # what a drag between two points selects
 quickcopy --settings                      # open the settings window
 quickcopy --check-update                  # latest release, whether it is newer, its asset URLs
+quickcopy --download-model                # download the VieSVTR model, as Download in the settings does
 ```
 
 ## Environment variables

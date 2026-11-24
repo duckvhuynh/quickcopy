@@ -21,6 +21,7 @@ use windows::core::*;
 use windows_numerics::Vector2;
 
 use crate::i18n::{self, UiLang};
+use crate::model::{self, Download};
 use crate::settings::{self, Shortcut};
 use crate::update::{self, Status};
 use crate::{paint, theme};
@@ -34,10 +35,14 @@ const PAD: f32 = 16.0;
 /// Gap under the title bar.
 const TOP: f32 = 4.0;
 const ROW_H: f32 = 44.0;
-const FOOTER_H: f32 = 34.0;
+/// Space under the last row.
+const BOTTOM: f32 = 10.0;
+/// The language picker's key hint, at the bottom of the body.
+const HINT_H: f32 = 28.0;
 const ROWS: usize = 7;
 const CONTROL_W: f32 = 200.0;
 const BUTTON_W: f32 = 150.0;
+const MODEL_BUTTON_W: f32 = 96.0;
 const CONTROL_H: f32 = 28.0;
 const TEXT_PX: f32 = 13.0;
 const SMALL_PX: f32 = 12.0;
@@ -51,6 +56,7 @@ enum Hit {
     Shortcut,
     UiLang(UiLang),
     OcrToggle,
+    DownloadModel,
     UpdateToggle,
     CheckNow,
     Install,
@@ -87,7 +93,7 @@ fn scale(hwnd: HWND) -> f32 {
 }
 
 fn client_h() -> f32 {
-    TOP + ROWS as f32 * ROW_H + FOOTER_H
+    TOP + ROWS as f32 * ROW_H + BOTTOM
 }
 
 /// Redraws the window if it is open (the update status changed).
@@ -204,6 +210,8 @@ struct Layout {
     ui_en: D2D_RECT_F,
     ui_vi: D2D_RECT_F,
     ocr_toggle: D2D_RECT_F,
+    /// In place of the toggle while the model is missing.
+    model_button: D2D_RECT_F,
     update_toggle: D2D_RECT_F,
     update_button: D2D_RECT_F,
     search: D2D_RECT_F,
@@ -242,10 +250,11 @@ fn layout(hwnd: HWND) -> Layout {
         ui_en: D2D_RECT_F { right: mid, ..ui },
         ui_vi: D2D_RECT_F { left: mid, ..ui },
         ocr_toggle: toggle(&rows[4]),
+        model_button: control(&rows[4], MODEL_BUTTON_W),
         update_toggle: toggle(&rows[5]),
         update_button: control(&rows[6], BUTTON_W),
         search,
-        list: D2D_RECT_F { left: (PAD - 6.0) * s, top: search.bottom + 6.0 * s, right: body.right - (PAD - 6.0) * s, bottom: body.bottom },
+        list: D2D_RECT_F { left: (PAD - 6.0) * s, top: search.bottom + 6.0 * s, right: body.right - (PAD - 6.0) * s, bottom: body.bottom - HINT_H * s },
         rows,
     }
 }
@@ -286,7 +295,7 @@ fn hit_test(ui: &Ui, x: f32, y: f32) -> Hit {
                 (l.shortcut, Hit::Shortcut),
                 (l.ui_en, Hit::UiLang(UiLang::En)),
                 (l.ui_vi, Hit::UiLang(UiLang::Vi)),
-                (l.ocr_toggle, if model { Hit::OcrToggle } else { Hit::None }),
+                if model { (l.ocr_toggle, Hit::OcrToggle) } else { (l.model_button, model_button(model::status()).0) },
                 (l.update_toggle, Hit::UpdateToggle),
                 (l.update_button, update_button(&update::status()).0),
             ]
@@ -307,29 +316,31 @@ fn hit_test(ui: &Ui, x: f32, y: f32) -> Hit {
     }
 }
 
-/// What the update button does in `status`, and its label. It does nothing
-/// while a check or an install runs.
+/// What the update button does in `status`, and its label, which is also
+/// the update status. It does nothing while a check or an install runs.
 fn update_button(status: &Status) -> (Hit, String) {
     let t = i18n::t();
-    match status.offer() {
-        Some(r) => (Hit::Install, t.update_to.replace("{}", &r.version.to_string())),
-        None if status.busy() => (Hit::None, t.check_now.into()),
-        None => (Hit::CheckNow, t.check_now.into()),
+    if let Some(r) = status.offer() {
+        return (Hit::Install, t.update_to.replace("{}", &r.version.to_string()));
+    }
+    match status {
+        Status::Checking => (Hit::None, t.update_checking.into()),
+        Status::Installing(_) | Status::Restarting => (Hit::None, t.update_installing.into()),
+        // 404: nothing newer is published.
+        Status::UpToDate | Status::CheckFailed(update::Failure::NoRelease) => (Hit::CheckNow, t.up_to_date.into()),
+        Status::CheckFailed(_) => (Hit::CheckNow, t.check_again.into()),
+        _ => (Hit::CheckNow, t.check_now.into()),
     }
 }
 
-/// The line under "Updates".
-fn update_line(status: &Status) -> String {
+/// What the model button does while the model is missing, and its label:
+/// the percent while it downloads (main.rs starts that at launch).
+fn model_button(status: Download) -> (Hit, String) {
     let t = i18n::t();
     match status {
-        Status::NotChecked => t.update_not_checked.into(),
-        Status::Checking => t.update_checking.into(),
-        Status::UpToDate => t.up_to_date.into(),
-        Status::Available(r) => t.update_available.replace("{}", &r.version.to_string()),
-        Status::Installing(r) => t.update_installing.replace("{}", &r.version.to_string()),
-        Status::Restarting => t.update_restarting.into(),
-        Status::CheckFailed(f) => t.check_failed.replace("{}", f.text()),
-        Status::InstallFailed(_, f) => t.update_failed.replace("{}", f.text()),
+        Download::Running(p) => (Hit::None, format!("{p}%")),
+        Download::Idle => (Hit::DownloadModel, t.model_download.into()),
+        Download::Failed(_) => (Hit::DownloadModel, t.retry.into()),
     }
 }
 
@@ -382,6 +393,10 @@ fn click(ui: &mut Ui, hit: Hit) {
         Hit::OcrToggle => {
             settings::update(|s| s.vietnamese_ocr = !s.vietnamese_ocr);
             changed(ui);
+        }
+        Hit::DownloadModel => {
+            model::start(ui.main);
+            invalidate(ui);
         }
         Hit::UpdateToggle => {
             settings::update(|s| s.check_updates = !s.check_updates);
@@ -618,31 +633,33 @@ fn paint(ui: &mut Ui) -> Result<()> {
                     pen.text(label, centered, TEXT_PX, 400, if selected { p.on_accent } else { p.text }, false)?;
                 }
 
-                // Vietnamese text recognition (needs the model)
-                let model = crate::viet::model_path().is_some();
-                let mut label_row = row_text(4);
-                if !model {
-                    label_row.bottom = (label_row.top + label_row.bottom) / 2.0 + 2.0 * l.s;
-                    let below = D2D_RECT_F { top: label_row.bottom - 2.0 * l.s, bottom: l.rows[4].bottom - 4.0 * l.s, ..row_text(4) };
-                    pen.text(t.vietnamese_ocr_missing, below, SMALL_PX - 1.0, 400, p.subtle, false)?;
+                // Vietnamese text recognition: a toggle once the model is
+                // there; until then the download's percent, or a button
+                pen.text(t.vietnamese_ocr, row_text(4), TEXT_PX, 400, p.text, false)?;
+                if crate::viet::model_path().is_some() {
+                    pen.toggle(l.ocr_toggle, prefs.vietnamese_ocr, true)?;
+                } else {
+                    let (action, label) = model_button(model::status());
+                    let lw = paint::measure(&label, TEXT_PX * l.s, 400);
+                    if action == Hit::None {
+                        let right = D2D_RECT_F { left: l.model_button.right - lw, ..l.model_button };
+                        pen.text(&label, right, TEXT_PX, 400, p.subtle, false)?;
+                    } else {
+                        let fill = hover(action).then_some((p.hover.0, p.hover.1));
+                        pen.rounded(l.model_button, theme::CONTROL_RADIUS, fill, Some((p.control_border.0, p.control_border.1)))?;
+                        let centered = D2D_RECT_F { left: (l.model_button.left + l.model_button.right - lw) / 2.0, ..l.model_button };
+                        pen.text(&label, centered, TEXT_PX, 400, p.text, false)?;
+                    }
                 }
-                pen.text(t.vietnamese_ocr, label_row, TEXT_PX, 400, if model { p.text } else { p.subtle }, false)?;
-                pen.toggle(l.ocr_toggle, model && prefs.vietnamese_ocr, model)?;
 
                 // Check for updates automatically
                 pen.text(t.check_updates, row_text(5), TEXT_PX, 400, p.text, false)?;
                 pen.toggle(l.update_toggle, prefs.check_updates, true)?;
 
-                // Updates: status line, and Check now / Update to X.Y.Z
+                // Version, and a button that shows the update status:
+                // Check now / Up to date / Update to X.Y.Z
                 let status = update::status();
-                let mut label_row = row_text(6);
-                label_row.bottom = (label_row.top + label_row.bottom) / 2.0 + 2.0 * l.s;
-                let below = D2D_RECT_F { top: label_row.bottom - 2.0 * l.s, bottom: l.rows[6].bottom - 4.0 * l.s, right: l.update_button.left - 8.0 * l.s, ..row_text(6) };
-                let failed = matches!(status, Status::CheckFailed(_) | Status::InstallFailed(..));
-                unsafe { target.PushAxisAlignedClip(&below, D2D1_ANTIALIAS_MODE_ALIASED) };
-                pen.text(&update_line(&status), below, SMALL_PX - 1.0, 400, if failed { p.error } else { p.subtle }, false)?;
-                unsafe { target.PopAxisAlignedClip() };
-                pen.text(t.updates, label_row, TEXT_PX, 400, p.text, false)?;
+                pen.text(&t.version.replace("{}", env!("CARGO_PKG_VERSION")), row_text(6), TEXT_PX, 400, p.text, false)?;
                 let (action, label) = update_button(&status);
                 let (fill, color) = match action {
                     Hit::Install => (Some((p.accent, 1.0)), p.on_accent),
@@ -689,13 +706,10 @@ fn paint(ui: &mut Ui) -> Result<()> {
                 unsafe { target.PopAxisAlignedClip() };
             }
         }
-        // Footer
-        let footer = D2D_RECT_F { left: PAD * l.s, top: l.body.bottom, right: l.body.right - PAD * l.s, bottom: l.body.bottom + FOOTER_H * l.s };
-        let hint = match ui.mode {
-            Mode::Rows => format!("QuickCopy {}", env!("CARGO_PKG_VERSION")),
-            Mode::Picker { .. } => "↑ ↓ Enter · Esc".to_string(),
-        };
-        pen.text(&hint, footer, SMALL_PX - 1.0, 400, p.subtle, false)?;
+        if let Mode::Picker { .. } = ui.mode {
+            let hint = D2D_RECT_F { left: PAD * l.s, top: l.body.bottom - HINT_H * l.s, right: l.body.right - PAD * l.s, bottom: l.body.bottom };
+            pen.text("↑ ↓ Enter · Esc", hint, SMALL_PX - 1.0, 400, p.subtle, false)?;
+        }
         unsafe { target.EndDraw(None, None) }
     });
     match drawn {
