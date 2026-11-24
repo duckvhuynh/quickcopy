@@ -1,6 +1,6 @@
 [package]
 name = "quickcopy"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 # ort 2.0.0-rc.15 is the dependency that needs the newest Rust.
 rust-version = "1.92"
