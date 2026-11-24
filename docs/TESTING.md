@@ -23,6 +23,15 @@ This prints what screen captures, Direct2D, the OCR engines and
 translation requests cost in time and memory on your machine. The
 translation benchmark sends requests to Google.
 
+`bench_rests` rests at screen points, as the cursor would, and prints what
+each rest read and how long it took. A rest where nothing changed since an
+earlier one is a cache hit:
+
+```powershell
+$env:QC_LOG = 1; $env:QC_AT = "900,600 960,640 1700,900"
+cargo test --release bench_rests -- --ignored --nocapture
+```
+
 ## Command-line flags
 
 `quickcopy.exe` has these flags for checking what it reads without

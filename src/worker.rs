@@ -2081,6 +2081,37 @@ mod bench {
         drop(d);
         stage("detector dropped");
     }
+    /// Rests at each screen point in QC_AT ("x,y x,y ..."), in order, as the
+    /// cursor would: a rest where nothing changed since an earlier one is a
+    /// cache hit. QC_LOG shows the stages.
+    #[test]
+    #[ignore = "timing on the real screen"]
+    fn bench_rests() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        }
+        let Ok(at) = std::env::var("QC_AT") else {
+            println!("bench_rests: set QC_AT to \"x,y x,y ...\" (screen points)");
+            return;
+        };
+        let mut d = Detector::new().unwrap();
+        d.ignore_cursor = true;
+        for point in at.split_whitespace() {
+            let (x, y) = point.split_once(',').expect("x,y");
+            let pt = POINT { x: x.parse().unwrap(), y: y.parse().unwrap() };
+            let rest = format!("rest at {point}");
+            let t0 = Instant::now();
+            let mut words = 0;
+            let found = d.detect(pt, true, &mut |_, data| words = data.words.len()).unwrap();
+            let what = match found {
+                Found::Image(c) => format!("read {}x{}, {words} words", c.clip.right - c.clip.left, c.clip.bottom - c.clip.top),
+                Found::PlayingVideo(_) => "a playing video".into(),
+                Found::Nothing => "nothing".into(),
+            };
+            println!("{rest}: {what} in {:?}", t0.elapsed());
+        }
+    }
+
     #[test]
     #[ignore = "timing on the real screen"]
     fn bench_capture_paths() {
