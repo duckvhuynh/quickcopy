@@ -141,6 +141,8 @@ struct Facts {
     control_type: UIA_CONTROLTYPE_ID,
     /// It has a text pattern: an editor or a document (Notepad, Word).
     text: bool,
+    /// A web page, or any window Chromium draws (browsers and Electron apps
+    /// such as Teams, Discord, VS Code), with or without a tree.
     web: bool,
     picture: Option<Seen>,
 }
@@ -169,6 +171,11 @@ fn classify(f: Facts, page_content: impl FnOnce() -> bool) -> Verdict {
         (Some(Seen::Tree), _, _) => Verdict::Picture,
         (_, true, _) => Verdict::Native,
         (None, _, false) => Verdict::Native,
+        // A web page or a Chromium app draws its own text in areas that look
+        // bare (a chat, comments, a code editor), so only its pictures are
+        // read there: reading the rest put an overlay over text the user
+        // selects natively.
+        (None, _, true) if f.web => Verdict::Native,
         _ if f.web && page_content() => Verdict::Native,
         (Some(Seen::Pixels), _, _) => Verdict::Picture,
         (None, _, true) => Verdict::Surface,
@@ -357,7 +364,7 @@ impl Detector {
                 ibeam,
                 control_type,
                 text: element.GetCurrentPropertyValue(UIA_IsTextPatternAvailablePropertyId).is_ok_and(|v| bool::try_from(&v).unwrap_or(false)),
-                web: is_web(&element),
+                web: is_web(&element) || chromium_root(pt).is_some(),
                 picture: picture.as_ref().map(|(seen, _)| *seen),
             };
             (facts, element.CurrentBoundingRectangle()?)
@@ -1825,10 +1832,12 @@ mod tests {
     }
 
     #[test]
-    fn a_web_page_area_is_read_only_without_content_of_its_own() {
+    fn a_web_page_or_chromium_app_is_read_only_where_it_shows_a_picture() {
+        // A bare area of a page or an Electron app (TikTok's comments, a
+        // chat) is left alone, whatever its content check would say.
         let page = Facts { control_type: UIA_GroupControlTypeId, web: true, ..bare() };
-        assert_eq!(classify(page, || true), Verdict::Native);
-        assert_eq!(classify(page, || false), Verdict::Surface);
+        assert_eq!(classify(page, unasked), Verdict::Native);
+        assert_eq!(classify(Facts { control_type: UIA_PaneControlTypeId, ..page }, unasked), Verdict::Native);
         // The page's own document, as Chromium answers for any point before
         // it resolves points to elements: the page's text is there too.
         let document = Facts { control_type: UIA_DocumentControlTypeId, text: true, ..page };
